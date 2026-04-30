@@ -86,12 +86,13 @@ function playFuuroSound() {
 const WIND_LABELS = ["東", "南", "西", "北"];
 const DEFAULT_SETTINGS = {
   gameType: "hanchan", startPoints: 25000, returnPoints: 30000,
-  uma: [30, 10, -10, -30], // デフォルト10-30（1位+30, 2位+10, 3位-10, 4位-30）
+  uma: [30, 10, -10, -30],
   notenPenalty: 3000, tobiEnd: true, doubleRon: true,
   nyu: true,
   yakitori: 0,
   tobiBonus: 0,
   kiriage: true,
+  chonboRule: "mangan", // "mangan"=満貫払い / "3000all"=3000オール
 };
 const UMA_PRESETS = [
   { label:"5-10",  val:[10,5,-5,-10] },
@@ -1338,6 +1339,7 @@ function SetupScreen({ members, settings, onStart }) {
             (settings.kiriage??true)?"繰り上げ満貫あり":"繰り上げ満貫なし",
             settings.yakitori?`焼き鳥${settings.yakitori}`:null,
             settings.tobiBonus?`トビ賞${settings.tobiBonus}`:null,
+            settings.chonboRule==="3000all"?"チョンボ:3000オール":"チョンボ:満貫払い",
           ].filter(Boolean).map((t,i) => (
             <span key={i} style={{background:"var(--s2)",border:"1px solid var(--bd)",
               borderRadius:20,padding:"3px 9px",fontSize:11,color:"var(--tx2)"}}>{t}</span>
@@ -1490,10 +1492,14 @@ function GameScreen({ gameState, setGameState, onFinish }) {
       // 和了者を特定（deltaがプラスの人）
       const winnerIdx = delta.findIndex((d, i) => d > 0);
       if (winnerIdx >= 0) {
-        // 全供託（前局以前の供託 + 今局のリーチ棒すべて）を和了者に加算
         correctedDelta[winnerIdx] += kyotakuPoints;
         newKyotakuPoints = 0;
       }
+    } else if (info.nagashi) {
+      // 流し満貫: 和了者（deltaが最大の人）に供託を渡す
+      const winnerIdx = delta.reduce((mi,v,i)=>v>delta[mi]?i:mi, 0);
+      correctedDelta[winnerIdx] += kyotakuPoints;
+      newKyotakuPoints = 0;
     }
     // 流局・チョンボ時は供託持ち越し（kyotakuPointsはそのまま）
 
@@ -1772,10 +1778,48 @@ function GameScreen({ gameState, setGameState, onFinish }) {
         <Modal title="終局" onClose={()=>setModal(null)}>
           <button className="mo" onClick={()=>{if(settings.doubleRon){setSelPs([]);setModal("dr_sel");}else{setSelP(null);setModal("wts");}}}>和了</button>
           <button className="mo" onClick={()=>setModal("ryukyoku")}>流局</button>
+          <button className="mo" onClick={()=>setModal("special_ryukyoku")}>特殊流局</button>
           <button className="mo" onClick={()=>setModal("chonbo")}>チョンボ</button>
           <button className="mo" style={{color:"var(--minus)"}} onClick={()=>setModal("early_exit")}>途中終了</button>
           <button className="mo moc" onClick={()=>setModal(null)}>キャンセル</button>
         </Modal>
+      )}
+
+      {modal==="special_ryukyoku" && (
+        <Modal title="特殊流局" onClose={()=>setModal("round_menu")}>
+          <p style={{fontSize:12,color:"var(--tx2)",marginBottom:9,textAlign:"center"}}>種類を選択</p>
+          <button className="mo" onClick={()=>setModal("kyushu")}>
+            九種九牌など
+            <span style={{fontSize:11,color:"var(--tx3)",display:"block"}}>連荘・本場+1・供託持ち越し</span>
+          </button>
+          <button className="mo" onClick={()=>setModal("nagashi")}>
+            流し満貫
+            <span style={{fontSize:11,color:"var(--tx3)",display:"block"}}>満貫ツモ相当・本場+1</span>
+          </button>
+          <button className="mo moc" onClick={()=>setModal("round_menu")}>戻る</button>
+        </Modal>
+      )}
+
+      {modal==="kyushu" && (
+        <Modal title="九種九牌など" onClose={()=>setModal("special_ryukyoku")}>
+          <p style={{fontSize:12,color:"var(--tx2)",marginBottom:12,textAlign:"center"}}>
+            全員±0・連荘・本場+1・供託持ち越し
+          </p>
+          <button className="mo" onClick={()=>{
+            const delta = players.map(()=>0);
+            applyResult(delta, {kyushu:true, renchon:true});
+          }}>確定</button>
+          <button className="mo moc" onClick={()=>setModal("special_ryukyoku")}>戻る</button>
+        </Modal>
+      )}
+
+      {modal==="nagashi" && (
+        <NagashiModal players={players} oyaIdx={oyaIdx} settings={settings}
+          honba={cr.honba} roundStatus={rs}
+          onConfirm={(delta, isOyaTenpai)=>{
+            applyResult(delta, {nagashi:true, renchon:isOyaTenpai});
+          }}
+          onClose={()=>setModal("special_ryukyoku")}/>
       )}
 
       {modal==="early_exit" && (
@@ -1851,10 +1895,16 @@ function GameScreen({ gameState, setGameState, onFinish }) {
           {players.map((p,i)=>(
             <button key={i} className="mo" onClick={()=>{
               const wasR = rs[i]==="riichi";
-              const delta = players.map((_,j)=>{
-                if (j===i) return (isOya(i)?-12000:-8000)+(wasR?1000:0);
-                return isOya(i)?4000:(j===oyaIdx?4000:2000);
-              });
+              const chonboRule = settings.chonboRule ?? "mangan";
+              let delta;
+              if (chonboRule === "3000all") {
+                delta = players.map((_,j)=>j===i ? -9000+(wasR?1000:0) : 3000);
+              } else {
+                delta = players.map((_,j)=>{
+                  if (j===i) return (isOya(i)?-12000:-8000)+(wasR?1000:0);
+                  return isOya(i)?4000:(j===oyaIdx?4000:2000);
+                });
+              }
               applyResult(delta, {chonbo:true, renchon:true});
             }}>{p}</button>
           ))}
@@ -1995,22 +2045,24 @@ function WinInputModal({ players, selP, winType, ronTarget, isOya, oyaIdx, playe
 
   const handleOk = () => {
     const han = hasYM ? 13 : totalHan;
-    // 役なし点数計算（特殊役・裏ドラ・一発を除いた基本点）
-    const baseYaku = selY.filter(k => !["ippatsu","uradora"].includes(k));
+    // 役なし点数計算（一発・裏ドラのみ除外、特殊役は含める）
+    // honba・供託は除外（純粋な役とドラの点数のみ）
+    const baseYaku = selY.filter(k => k !== "ippatsu");
     const baseYakuHan = baseYaku.reduce((s,k)=>{
       const y=YAKU.find(y=>y.key===k); return s+(y?(isFu?(y.hanF??0):y.han):0);
     },0)+yakuPai;
-    const baseDoraHan = dora + aka; // 裏ドラ除く
+    const baseDoraHan = dora + aka; // 裏ドラ除く（表ドラ・赤ドラは含める）
     const baseTotalHan = baseYakuHan + baseDoraHan;
 
     const calcBaseScore = () => {
       if (baseTotalHan <= 0) return 0;
+      // honba=0, kyotaku=0 で純粋な役・ドラ点数のみ計算
       if (winType==="tsumo") {
-        const bd = tsumoDeltas(baseTotalHan,effectiveFu,isOya,selP,oyaIdx,players.length,honba,0,kiriage);
+        const bd = tsumoDeltas(baseTotalHan,effectiveFu,isOya,selP,oyaIdx,players.length,0,0,kiriage);
         return bd ? bd[selP] : 0;
       } else {
         const bp = getRonPts(baseTotalHan,effectiveFu,isOya,kiriage);
-        return bp ? bp + honba*300 : 0;
+        return bp ?? 0;
       }
     };
     const baseScore = calcBaseScore();
@@ -2212,6 +2264,53 @@ function DoubleRonModal({ players, winners, ronTarget, oyaIdx, roundStatus, honb
         <span style={{color:"var(--gold)",fontWeight:700}}>{pvPts()}</span>
       </div>
       <button className="btn bp" disabled={!canOk} onClick={submitOne}>{step+1<sorted.length?"次の和了者へ →":"確定"}</button>
+    </Modal>
+  );
+}
+
+// ===================== NAGASHI MANGAN MODAL =====================
+function NagashiModal({ players, oyaIdx, settings, honba, roundStatus, onConfirm, onClose }) {
+  const [winnerIdx, setWinnerIdx] = useState(null);
+  const [oyaTenpai, setOyaTenpai] = useState(false);
+
+  const confirm = () => {
+    if (winnerIdx === null) return;
+    const isOya = winnerIdx === oyaIdx;
+    // 流し満貫 = 満貫ツモ相当（kyotaku=0, honba込み）
+    const d = tsumoDeltas(5, 30, isOya, winnerIdx, oyaIdx, players.length, honba, 0, settings.kiriage ?? true);
+    if (!d) return;
+    onConfirm(d, isOya || oyaTenpai);
+  };
+
+  return (
+    <Modal title="流し満貫" onClose={onClose}>
+      <p style={{fontSize:12,color:"var(--tx2)",marginBottom:9,textAlign:"center"}}>流し満貫の人を選択</p>
+      <div className="tg">
+        {players.map((p,i)=>(
+          <button key={i} className={`tb${winnerIdx===i?" on":" off"}`}
+            onClick={()=>setWinnerIdx(i)}>
+            {p}<br/><span style={{fontSize:11}}>{i===oyaIdx?"親":"子"}</span>
+          </button>
+        ))}
+      </div>
+      {winnerIdx !== null && winnerIdx !== oyaIdx && (
+        <div className="str" style={{padding:"8px 0"}}>
+          <span style={{fontSize:13}}>親がテンパイ（連荘）</span>
+          <div className="seg" style={{width:90}}>
+            <button className={`sb${oyaTenpai?" on":""}`} onClick={()=>setOyaTenpai(true)}>あり</button>
+            <button className={`sb${!oyaTenpai?" on":""}`} onClick={()=>setOyaTenpai(false)}>なし</button>
+          </div>
+        </div>
+      )}
+      {winnerIdx !== null && (
+        <div style={{padding:"6px 0 10px",fontSize:12,color:"var(--tx3)",textAlign:"center"}}>
+          {winnerIdx===oyaIdx ? "親の流し満貫：子3人に4000点ずつ" : "子の流し満貫：子2000点・親4000点"}
+        </div>
+      )}
+      <div style={{display:"flex",gap:7}}>
+        <button className="btn bp" disabled={winnerIdx===null} onClick={confirm}>確定</button>
+        <button className="btn bg" style={{width:"auto",padding:"13px 18px"}} onClick={onClose}>戻る</button>
+      </div>
     </Modal>
   );
 }
@@ -2602,8 +2701,7 @@ function StatsScreen({ games, onRefresh }) {
         <SR label="総ポイント" value={`${f1(totalScorePts)}`} mKey="totalScore"/>
         <SR label="平均順位" value={`${f1(st.avgRank)}位`} mKey="avgRank" higherBetter={false}/>
         <SR label="平均ポイント" value={`${f1(st.avgScore)}`} mKey="avgScore"/>
-        <SR label="平均素点" value={`${Math.round(st.avgFinalPts??0).toLocaleString()}点`} mKey="avgFinalPts"/>
-        <SR label="連帯率（1〜2位）" value={`${f1(st.rentai)}%`} mKey="rentai"/>
+        <SR label="平均素点" value={`${Math.round(st.avgFinalPts||0).toLocaleString()}点`} mKey="avgFinalPts"/>
         <SR label="トビ率" value={`${f1(st.tobi)}%`} mKey="tobi" higherBetter={false}/>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"10px 14px"}}>
           {st.ranks.map((c,i)=>(
@@ -2636,6 +2734,12 @@ function StatsScreen({ games, onRefresh }) {
         )}
       </div>
 
+      <div className="card">
+        <div className="chd">局別統計</div>
+        <SR label="親継続率" value={`${f1(st.oyaContinueRate)}%`} sub={`${st.oyaContinue}回/${st.oyaTotal}親番`} mKey="oyaContinueRate"/>
+        <SR label="流局時聴牌率" value={`${f1(st.ryukyokuTenpaiRate)}%`} sub={`${st.ryukyokuTenpaiCount}回/${st.ryukyokuCount}流局`} mKey="ryukyokuTenpaiRate"/>
+      </div>
+
       {/* 和了統計 */}
       <div className="card">
         <div className="chd">和了統計</div>
@@ -2658,6 +2762,7 @@ function StatsScreen({ games, onRefresh }) {
             </div>
           ))}
         </div>
+        <SR label="迎撃和了率" value={`${f1(st.counterWinRate)}%`} sub={`${st.counterWinsCount}回/${st.tr}局`} mKey="counterWinRate"/>
         <SR label="表ドラ平均" value={`${f1(st.avgDora)}枚`} sub={`総${st.totalDora}枚/${st.wins}回`} mKey="avgDora"/>
         <SR label="赤ドラ平均" value={`${f1(st.avgAka)}枚`} sub={`総${st.totalAka}枚/${st.wins}回`} mKey="avgAka"/>
         <div style={{padding:"0 12px 8px"}}>
@@ -2683,10 +2788,48 @@ function StatsScreen({ games, onRefresh }) {
         <SR label="放銃点損失" value={f1(st.dealLoss)} sub="平均放銃点×放銃率" mKey="dealLoss" higherBetter={false}/>
         <SR label="調整打点効率" value={f1(st.adjustedEff)} sub="打点効率−放銃点損失" mKey="adjustedEff"/>
         <SR label="局収支" value={`${Math.round(st.roundIncome).toLocaleString()}点`}
-          sub="(最終点合計−初期点×対局数)/総局数" mKey="roundIncome"/>
+          sub="(最終点合計−初期点合計)÷総局数" mKey="roundIncome"/>
         <SR label="偶発恩恵" value={`${f1(st.luckyBonus)}点`}
           sub="(実際収支−役なし時収支)÷総対局数" mKey="luckyBonus"/>
       </div>
+      <div className="card">
+        <div className="chd">役種達成回数</div>
+        <div style={{padding:"6px 12px 10px"}}>
+          {(function(){
+            var YAKU=[
+              ["立直","riichi"],["役牌","yakuhai"],["ドラ(枚)","dora"],
+              ["赤(枚)","aka"],["裏(枚)","ura"],["ツモ","tsumo_count"],
+              ["門前清自摸和","menzen_tsumo"],["平和","pinfu"],["断么九","tanyao"],
+              ["一盃口","iipeiko"],["ダブ立直","daburi"],
+              ["一発","ippatsu"],["嶺上","rinshan"],["槍槓","chankan"],
+              ["海底","haitei"],["河底","houtei"],
+              ["七対子","chiitoitsu"],["対々和","toitoi"],["三暗刻","sananko"],
+              ["混一色","honitsu"],["清一色","chinitsu"],
+              ["混全帯","chanta"],["三色同順","sanshoku"],["一気通貫","ittsu"],
+              ["二盃口","ryanpeiko"],["小三元","shosangen"],
+              ["混老頭","honroto"],["純全帯","junchan"],
+              ["国士","kokushi"],["四暗刻","suanko"],["大三元","daisangen"],
+              ["字一色","tsuiso"],["緑一色","ryuiso"],["天和","tenho"],["地和","chiho"],
+            ];
+            var ALWAYS=["riichi","yakuhai","dora","aka","ura","tsumo_count","menzen_tsumo","pinfu","tanyao","ippatsu"];
+            var c=st.yakuCounts||{};
+            var vis=YAKU.filter(function(x){return(c[x[1]]||0)>0||ALWAYS.indexOf(x[1])>=0;});
+            var rows=[];
+            for(var i=0;i<vis.length;i+=2)rows.push(vis.slice(i,i+2));
+            return rows.map(function(row,ri){
+              return(<div key={ri} style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:3,marginBottom:3}}>
+                {row.map(function(x){var cnt=c[x[1]]||0;return(
+                  <div key={x[1]} style={{display:"flex",justifyContent:"space-between",padding:"4px 8px",background:"var(--s2)",borderRadius:6}}>
+                    <span style={{fontSize:11,color:"var(--tx2)"}}>{x[0]}</span>
+                    <span style={{fontSize:13,fontWeight:700,color:cnt>0?"var(--ac)":"var(--tx3)"}}>{cnt}</span>
+                  </div>
+                );})}
+              </div>);
+            });
+          })()}
+        </div>
+      </div>
+
       </>)}
     </div>
   );
@@ -2754,49 +2897,73 @@ function calcStats(player, games) {
   const dealLoss=avgDeal*dealRate/100;
   const adjustedEff=scoringEff-dealLoss;
   // 局収支: (最終点数合計 - 初期点数×対局数) / 総局数
-  const roundIncome = tr>0 ? (totalFinalPts - totalStartPts * totalGames) / tr : 0;
+  const roundIncome = tr>0 ? (totalFinalPts - totalStartPts) / tr : 0;
   // 平均素点: 最終持ち点の平均
   const avgFinalPts = totalGames>0 ? totalFinalPts / totalGames : 0;
 
   // 偶発恩恵: (実際収支 - 役なし時収支) ÷ 総対局数
-  // あがり時: 実際点数 - baseScore（役なし点数）
-  // 放銃時: 実際失点 - 役なし時の失点（baseScoreがない場合は差分0）
-  // ロン放銃: 放銃された点数のうち特殊役・裏ドラ分はbaseScoreがない → 差分として計上
+  // 役なし = 一発・裏ドラを除いた場合の点数（baseScore）
+  // 和了者の恩恵: 実際得点 - baseScore（供託・本場は両方から除外済み）
+  // 放銃者の恩恵: 役なし時の失点 = -baseScore（放銃点 = 和了点なので単純にマイナス）
+  // ツモ払い手: 按分せず0とみなす（払い手の偶発要素は和了者側で計上）
   let luckyBonusTotal = 0;
   allR.forEach(({r, pi}) => {
-    if (!r.info?.type) return;
+    if (!r.info?.type || !r.info.baseScore) return;
     const actual = r.delta[pi];
-    let base = actual; // デフォルト: 差分なし
-    if (r.info.type === "tsumo" || r.info.type === "ron") {
-      const winnerIdx = r.delta.findIndex((d,i) => d > 0);
-      if (pi === winnerIdx) {
-        // 和了者: 実際得点 - baseScore
-        base = r.info.baseScore ?? actual;
-      } else if (r.info.type === "ron" && r.info.from === pi) {
-        // 放銃者: 役なし時の放銃点を推定（baseScoreを使って比率で計算）
-        // 実際放銃点に対してbaseScore/actualWin の比率を適用
-        const actualWin = r.delta[winnerIdx] ?? 0;
-        if (actualWin > 0 && r.info.baseScore) {
-          base = Math.round(actual * r.info.baseScore / actualWin);
-        }
-      }
-      // ツモの払い手も同様に比率計算
-      else if (r.info.type === "tsumo") {
-        const actualWin = r.delta[winnerIdx] ?? 0;
-        if (actualWin > 0 && r.info.baseScore) {
-          base = Math.round(actual * r.info.baseScore / actualWin);
-        }
-      }
+    const winnerIdx = r.delta.findIndex(d => d > 0);
+    if (pi === winnerIdx) {
+      // 和了者: 実際得点（供託含む）- baseScore
+      // baseScoreはhonba・供託なしで計算済みなので、その差が偶発恩恵
+      luckyBonusTotal += (actual - r.info.baseScore);
+    } else if (r.info.type === "ron" && r.info.from === pi) {
+      // ロン放銃者: 役なし時の失点は -baseScore
+      luckyBonusTotal += (actual - (-r.info.baseScore));
     }
-    luckyBonusTotal += (actual - base);
+    // ツモ払い手は0（和了者側で集計）
   });
   const luckyBonus = n > 0 ? luckyBonusTotal / n : 0;
+
+  // 迎撃和了率
+  var counterWins=wins.filter(function(x){
+    var others=x.r.riichiOrder?x.r.riichiOrder.some(function(o){return o.pIdx!==x.pi&&o.orderInRound===1;}):false;
+    return others&&x.r.roundStatus?.[x.pi]!=="riichi";
+  });
+  // 親継続率
+  var oyaTotal=0,oyaContinue=0;
+  games.forEach(function(g){
+    var pi=g.players.indexOf(player);if(pi<0)return;
+    var ds=g.currentRound&&g.currentRound.dealerStart?g.currentRound.dealerStart:0;
+    g.rounds.forEach(function(r,ri){
+      if((ds+ri)%4===pi){oyaTotal++;if(r.info&&(r.info.renchon||r.info.chonbo||r.info.kyushu))oyaContinue++;}
+    });
+  });
+  // 流局時聴牌率
+  var ryuR=allR.filter(function(x){return x.r.info&&x.r.info.ryukyoku;});
+  var ryuT=ryuR.filter(function(x){return x.r.roundStatus&&x.r.roundStatus[x.pi]==="riichi";});
+  // 役回数
+  var yakuCounts={};
+  wins.forEach(function(x){
+    var yaku=x.r.info&&x.r.info.yaku?x.r.info.yaku:[];
+    yaku.forEach(function(k){
+      if(k==="riichi"||k==="daburi"){yakuCounts["riichi"]=(yakuCounts["riichi"]||0)+1;return;}
+      yakuCounts[k]=(yakuCounts[k]||0)+1;
+    });
+    if(x.r.info&&x.r.info.yakuPai>0)yakuCounts["yakuhai"]=(yakuCounts["yakuhai"]||0)+1;
+    if(x.r.info&&x.r.info.dora>0)yakuCounts["dora"]=(yakuCounts["dora"]||0)+x.r.info.dora;
+    if(x.r.info&&x.r.info.aka>0)yakuCounts["aka"]=(yakuCounts["aka"]||0)+x.r.info.aka;
+    if(x.r.info&&x.r.info.ura>0)yakuCounts["ura"]=(yakuCounts["ura"]||0)+x.r.info.ura;
+    if(x.r.info&&x.r.info.type==="tsumo")yakuCounts["tsumo_count"]=(yakuCounts["tsumo_count"]||0)+1;
+  });
 
   return{
     games:n, tr,
     avgRank:n>0?ranks.reduce((s,c,i)=>s+c*(i+1),0)/n:0,
     avgScore:n>0?totalScorePts/n:0,
     ranks, rentai:n>0?(ranks[0]+ranks[1])/n*100:0, tobi:n>0?tobi/n*100:0,
+    counterWinRate:tr?counterWins.length/tr*100:0, counterWinsCount:counterWins.length,
+    oyaContinueRate:oyaTotal?oyaContinue/oyaTotal*100:0, oyaTotal:oyaTotal, oyaContinue:oyaContinue,
+    ryukyokuTenpaiRate:ryuR.length?ryuT.length/ryuR.length*100:0, ryukyokuCount:ryuR.length, ryukyokuTenpaiCount:ryuT.length,
+    yakuCounts:yakuCounts,
     wins:wins.length, deals:deals.length, rRcnt:rR.length, fRcnt:fR.length,
     horaRate, dealRate,
     riichiRate:tr?rR.length/tr*100:0,
@@ -2873,7 +3040,7 @@ function SettingsScreen({ settings, setSettings, members, setMembers, games, use
             <button onClick={()=>{
                 const hasData = games && games.some(g=>g.players.includes(m));
                 if(hasData){
-                  if(!window.confirm(`「${m}」の対局記録が存在します。\n削除しても記録は残りますが、集計などで名前が表示されます。\n削除してよろしいですか？`)) return;
+                  if(!window.confirm("「"+m+"」の対局記録が存在します。削除してよろしいですか？")) return;
                 }
                 setMembers(p=>p.filter((_,j)=>j!==i));
               }}
@@ -2953,8 +3120,17 @@ function SettingsScreen({ settings, setSettings, members, setMembers, games, use
         <div className="str">
           <span style={{fontSize:13}}>繰り上げ満貫<br/><span style={{fontSize:10,color:"var(--tx3)"}}>4翻30符・3翻60符</span></span>
           <div className="seg" style={{width:105}}>
-            <button className={`sb${(settings.kiriage??true)?" on":""}`} onClick={()=>setSettings(s=>({...s,kiriage:true}))}>あり</button>
-            <button className={`sb${!(settings.kiriage??true)?" on":""}`} onClick={()=>setSettings(s=>({...s,kiriage:false}))}>なし</button>
+            <button className={`sb${settings.kiriage!==false?" on":""}`} onClick={()=>setSettings(s=>({...s,kiriage:true}))}>あり</button>
+            <button className={`sb${settings.kiriage===false?" on":""}`} onClick={()=>setSettings(s=>({...s,kiriage:false}))}>なし</button>
+          </div>
+        </div>
+        <div className="str">
+          <span style={{fontSize:13}}>チョンボ</span>
+          <div className="seg" style={{width:140}}>
+            <button className={`sb${(!settings.chonboRule||settings.chonboRule==="mangan")?" on":""}`}
+              onClick={()=>setSettings(s=>({...s,chonboRule:"mangan"}))}>満貫払い</button>
+            <button className={`sb${settings.chonboRule==="3000all"?" on":""}`}
+              onClick={()=>setSettings(s=>({...s,chonboRule:"3000all"}))}>3000オール</button>
           </div>
         </div>
       </div>
