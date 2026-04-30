@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="麻雀スコア">
-<title>麻雀スコア</title>
+<meta name="apple-mobile-web-app-title" content="雀録 MJ-LOG">
+<title>雀録 MJ-LOG</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -564,7 +564,10 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--tx);
 .ni.on svg{stroke:var(--ac);}
 .ni.on .ni-fill{fill:var(--ac);stroke:none;}
 /* SCREEN */
-.scr{flex:1;padding:12px 13px 80px;overflow-y:auto;}
+.scr{flex:1;padding:12px 13px 80px;padding-top:max(20px, calc(env(safe-area-inset-top) + 8px));overflow-y:auto;}
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:max(16px, calc(env(safe-area-inset-top) + 10px)) 13px 0;
+  position:sticky;top:0;z-index:50;background:var(--bg);}
 /* CARD */
 .card{background:var(--s1);border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;margin-bottom:10px;}
 .chd{padding:11px 15px;font-weight:700;font-size:13px;color:var(--tx2);border-bottom:1px solid var(--bd);
@@ -703,8 +706,6 @@ body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--tx);
   border:1px solid var(--bd);border-radius:var(--rs);cursor:pointer;transition:all .15s;}
 .mc.sel{border-color:var(--ac);background:rgba(61,142,255,.14);}
 /* MISC */
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:13px 13px 0;
-  position:sticky;top:0;z-index:50;background:var(--bg);}
 .tt{font-size:16px;font-weight:900;}
 .ib{width:33px;height:33px;border-radius:50%;background:var(--s2);border:1px solid var(--bd);
   display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;color:var(--tx2);}
@@ -817,7 +818,7 @@ function App() {
   const [syncing, setSyncing] = useState(false);
 
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [members, setMembers] = useState(["長岡","笠井","吉住","森澤","山田","佐藤"]);
+  const [members, setMembers] = useState([]);
   const [games, setGames] = useState([]);
   const [gameState, setGameState] = useState(null);
   const [viewingGame, setViewingGame] = useState(null);
@@ -832,6 +833,18 @@ function App() {
       setAuthLoading(false);
     }
   }, []);
+
+  // タブがフォーカスされた時に対局データを再同期（複数端末対応）
+  useEffect(() => {
+    const onFocus = () => {
+      const saved = loadSession();
+      if (saved?.access_token && !gameState) {
+        sb.getGames(saved.access_token).then(g => setGames(g)).catch(()=>{});
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [gameState]);
 
   const loadUserData = async (token) => {
     setSyncing(true);
@@ -868,7 +881,7 @@ function App() {
     if (session) await sb.signOut(session.access_token);
     setSession(null);
     saveSession(null);
-    setGames([]); setMembers(["長岡","笠井","吉住","森澤","山田","佐藤"]);
+    setGames([]); setMembers([]);
     setSettings(DEFAULT_SETTINGS);
   };
 
@@ -886,6 +899,7 @@ function App() {
       players: [...players], settings: { ...settings }, rounds: [],
       currentRound: { wind:0, round:1, honba:0, kyotaku:0, dealerStart: oyaStart },
       points: players.map(() => settings.startPoints),
+      kyotakuPoints: 0,  // 供託として場に出ている点数合計（points合計+kyotakuPoints=定数）
       roundStatus: players.map(() => null),
       fuuroCount: players.map(() => 0),
       riichiOrder: [], totalRiichiCount: 0,
@@ -961,7 +975,7 @@ function App() {
           viewing={viewingGame} setViewing={setViewingGame}/>}
         {tab==="stats" && <StatsScreen games={games}/>}
         {tab==="settings" && <SettingsScreen settings={settings} setSettings={setSettings}
-          members={members} setMembers={setMembers}
+          members={members} setMembers={setMembers} games={games}
           userEmail={session.user.email} onSignOut={handleSignOut}/>}
         {!gameState && (
           <nav className="nav">
@@ -991,6 +1005,118 @@ function App() {
   );
 }
 
+// ===================== APP TOP BAR (全画面共通) =====================
+function AppTopBar({ title, right }) {
+  return (
+    <div style={{
+      background:"var(--bg)", position:"sticky", top:0, zIndex:60,
+      borderBottom:"1px solid var(--bd)",
+      paddingTop:"max(10px, calc(env(safe-area-inset-top) + 4px))",
+    }}>
+      {/* 1段目：ロゴアイコン＋雀録＋MJ-LOG */}
+      <div style={{padding:"0 14px 5px", display:"flex", alignItems:"center", gap:7}}>
+        <MjLogo size={22}/>
+        <span style={{
+          fontSize:14, fontWeight:900, color:"var(--tx)", letterSpacing:1,
+          fontFamily:"'Hiragino Mincho ProN','游明朝','Yu Mincho',serif",
+        }}>雀録</span>
+        <span style={{fontSize:9, color:"var(--tx3)", letterSpacing:3, fontFamily:"monospace"}}>MJ-LOG</span>
+      </div>
+      {/* 2段目：ページタイトル＋アクションボタン */}
+      <div style={{
+        display:"flex", alignItems:"center", justifyContent:"space-between",
+        padding:"2px 14px 10px",
+      }}>
+        <span style={{fontSize:17, fontWeight:900, color:"var(--tx)"}}>{title ?? ""}</span>
+        {right && <div style={{display:"flex",gap:6,alignItems:"center"}}>{right}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ===================== LOGO SVG =====================
+function MjLogo({ size = 80 }) {
+  // 麻雀牌の比率: 縦4 横3 → width=size*0.75, height=size
+  const w = size * 0.75;
+  const h = size;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r  = Math.min(w, h) * 0.33;  // 扇形の外径
+  const ri = Math.min(w, h) * 0.18;  // 扇形の内径（棒グラフ用スペース）
+
+  const toRad = d => d * Math.PI / 180;
+  const arc = (startDeg, endDeg) => {
+    const x1  = cx + r  * Math.cos(toRad(startDeg));
+    const y1  = cy + r  * Math.sin(toRad(startDeg));
+    const x2  = cx + r  * Math.cos(toRad(endDeg));
+    const y2  = cy + r  * Math.sin(toRad(endDeg));
+    const xi1 = cx + ri * Math.cos(toRad(startDeg));
+    const yi1 = cy + ri * Math.sin(toRad(startDeg));
+    const xi2 = cx + ri * Math.cos(toRad(endDeg));
+    const yi2 = cy + ri * Math.sin(toRad(endDeg));
+    const lg = endDeg - startDeg > 180 ? 1 : 0;
+    return `M${xi1},${yi1} L${x1},${y1} A${r},${r} 0 ${lg} 1 ${x2},${y2} L${xi2},${yi2} A${ri},${ri} 0 ${lg} 0 ${xi1},${yi1}Z`;
+  };
+
+  const sw = size * 0.018; // stroke width
+  const rx = size * 0.08;  // 牌の丸角
+
+  // 人物アイコン（円のみ）
+  const person = (px, py) => {
+    const pr = size * 0.042;
+    return (
+      <g key={`${px}-${py}`}>
+        <circle cx={px} cy={py} r={pr} fill="white" stroke="#111" strokeWidth={sw*0.8}/>
+        <circle cx={px} cy={py} r={pr*0.45} fill="#111"/>
+      </g>
+    );
+  };
+
+  const shadow = size * 0.05;
+
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{flexShrink:0,overflow:"visible"}}>
+      {/* 牌の影（奥行き感） */}
+      <rect x={shadow} y={shadow} width={w-size*0.04} height={h-size*0.04}
+        rx={rx} ry={rx} fill="#666"/>
+      {/* 牌の本体 */}
+      <rect x={0} y={0} width={w-size*0.02} height={h-size*0.02}
+        rx={rx} ry={rx} fill="white" stroke="#111" strokeWidth={sw}/>
+      {/* 内枠 */}
+      <rect x={size*0.04} y={size*0.04} width={w-size*0.1} height={h-size*0.1}
+        rx={rx*0.6} ry={rx*0.6} fill="none" stroke="#ddd" strokeWidth={sw*0.5}/>
+
+      {/* 4色扇形（牌の中央） */}
+      <path d={arc(-90,   0)} fill="#2d6e3e"/>  {/* 上: 緑 */}
+      <path d={arc(  0,  90)} fill="#8b2020"/>  {/* 右: 赤 */}
+      <path d={arc( 90, 180)} fill="#222"/>     {/* 下: 黒 */}
+      <path d={arc(180, 270)} fill="#888"/>     {/* 左: グレー */}
+
+      {/* 外周円 */}
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#111" strokeWidth={sw}/>
+      {/* 内周円（棒グラフエリア・白塗り） */}
+      <circle cx={cx} cy={cy} r={ri} fill="white" stroke="#111" strokeWidth={sw*0.8}/>
+
+      {/* 棒グラフ（内周円内） */}
+      {[
+        {dx:-ri*0.48, h:ri*0.58},
+        {dx:-ri*0.12, h:ri*0.78},
+        {dx: ri*0.24, h:ri*1.0},
+      ].map((b,i) => (
+        <rect key={i}
+          x={cx+b.dx} y={cy+ri*0.38-b.h}
+          width={ri*0.28} height={b.h}
+          rx={ri*0.06} fill="#111"/>
+      ))}
+
+      {/* 4方向の人物アイコン */}
+      {person(cx,          cy - r - size*0.055)}
+      {person(cx + r + size*0.055, cy)}
+      {person(cx,          cy + r + size*0.055)}
+      {person(cx - r - size*0.055, cy)}
+    </svg>
+  );
+}
 // ===================== AUTH SCREEN =====================
 function AuthScreen({ mode, setMode, onAuth, loading }) {
   const [email, setEmail] = useState("");
@@ -1008,8 +1134,19 @@ function AuthScreen({ mode, setMode, onAuth, loading }) {
     <div style={{minHeight:"100vh",background:"var(--bg)",display:"flex",flexDirection:"column",
       alignItems:"center",justifyContent:"center",padding:"24px"}}>
       <style>{css}</style>
-      <div style={{fontSize:32,marginBottom:8}}>🀄</div>
-      <div style={{fontSize:22,fontWeight:900,color:"var(--tx)",marginBottom:4}}>麻雀スコア</div>
+      <MjLogo size={120}/>
+      <div style={{marginTop:16,marginBottom:28,textAlign:"center"}}>
+        <div style={{
+          fontSize:42, fontWeight:900, color:"var(--tx)",
+          fontFamily:"'Hiragino Mincho ProN','游明朝','Yu Mincho','serif'",
+          letterSpacing:8, lineHeight:1.1,
+        }}>雀録</div>
+        <div style={{
+          fontSize:13, fontWeight:500, color:"var(--tx2)",
+          letterSpacing:6, marginTop:4,
+          fontFamily:"'Courier New', monospace",
+        }}>MJ-LOG</div>
+      </div>
       <div style={{fontSize:13,color:"var(--tx2)",marginBottom:32}}>
         {mode==="login" ? "アカウントにログイン" : "新規アカウント作成"}
       </div>
@@ -1064,7 +1201,7 @@ function SetupScreen({ members, settings, onStart }) {
 
   return (
     <div className="scr fade">
-      <div className="topbar" style={{marginBottom:13}}><div className="tt">🀄 対局設定</div></div>
+      <AppTopBar title="対局"/>
 
       <div className="card">
         <div className="chd">メンバー選択（4人）<span style={{fontSize:11,color:"var(--tx3)"}}>{sel.length}/4</span></div>
@@ -1176,9 +1313,10 @@ function GameScreen({ gameState, setGameState, onFinish }) {
   const fuuroCount = gs.fuuroCount || players.map(() => 0);
   const riichiOrder = gs.riichiOrder || [];
   const totalRiichiCount = gs.totalRiichiCount || 0;
+  const kyotakuPoints = gs.kyotakuPoints ?? 0;  // 場に出ている供託点数
   const wl = ["東","南","西","北"][cr.wind];
+  // riは表示用（現在の供託本数、リーチ後も更新される）
   const ri = `${wl}${cr.round}局 ${cr.honba}本場 供託${cr.kyotaku}本`;
-  // 東家: 開始時の東家(dealerStart)から局数分ずらす
   const dealerStart = cr.dealerStart ?? 0;
   const totalRoundsPlayed = cr.wind * 4 + (cr.round - 1);
   const oyaIdx = (dealerStart + totalRoundsPlayed) % 4;
@@ -1193,23 +1331,30 @@ function GameScreen({ gameState, setGameState, onFinish }) {
     if (cur === "fuuro") return;
     const ns = [...rs];
     if (cur === "riichi") {
-      // キャンセル: リーチ順も除去
+      // キャンセル: 点数を戻す、供託を元に戻す
       ns[pIdx] = null;
       const np = [...points]; np[pIdx] += 1000;
       const newOrder = riichiOrder.filter(o => o.pIdx !== pIdx);
-      setGameState({ ...gs, roundStatus: ns, points: np, riichiOrder: newOrder,
+      setGameState({ ...gs,
+        roundStatus: ns, points: np,
+        kyotakuPoints: kyotakuPoints - 1000,
+        riichiOrder: newOrder,
         totalRiichiCount: Math.max(0, totalRiichiCount - 1),
-        currentRound: { ...cr, kyotaku: Math.max(0, cr.kyotaku-1) } });
+        currentRound: { ...cr, kyotaku: Math.max(0, cr.kyotaku-1) }
+      });
     } else {
       playRiichiSound();
       ns[pIdx] = "riichi";
       const np = [...points]; np[pIdx] -= 1000;
-      // 今局何番目のリーチか記録
       const orderInRound = riichiOrder.length + 1;
       const newOrder = [...riichiOrder, { pIdx, orderInRound }];
-      setGameState({ ...gs, roundStatus: ns, points: np, riichiOrder: newOrder,
+      setGameState({ ...gs,
+        roundStatus: ns, points: np,
+        kyotakuPoints: kyotakuPoints + 1000,
+        riichiOrder: newOrder,
         totalRiichiCount: totalRiichiCount + 1,
-        currentRound: { ...cr, kyotaku: cr.kyotaku+1 } });
+        currentRound: { ...cr, kyotaku: cr.kyotaku+1 }
+      });
     }
   };
 
@@ -1238,38 +1383,73 @@ function GameScreen({ gameState, setGameState, onFinish }) {
 
   const applyResult = (delta, info, rewindTo = null) => {
     const baseRounds = rewindTo !== null ? gs.rounds.slice(0, rewindTo) : gs.rounds;
-    const basePoints = rewindTo !== null
-      ? baseRounds.reduce(
-          (acc, r) => acc.map((v, i) => v + (r.delta[i] ?? 0)),
-          players.map(() => settings.startPoints)
-        )
-      : [...gs.points];
 
-    // 今局リーチした本数（これはpoints上で既に-1000済み、供託としてカウントしない）
-    const thisRoundRiichiCount = rs.filter(s => s === "riichi").length;
-    // 前局以前の供託のみ和了者に渡す
-    const prevKyotaku = Math.max(0, cr.kyotaku - thisRoundRiichiCount);
+    // basePointsは常にstartPointsからroundsのdeltaを積み上げて計算
+    // （gs.pointsはリーチで引かれた状態のため使わない）
+    const startPoints = players.map(() => settings.startPoints);
+    const basePoints = baseRounds.reduce(
+      (acc, r) => acc.map((v, i) => v + (r.delta[i] ?? 0)),
+      startPoints
+    );
 
-    // delta修正不要（WinInputModal側でprevKyotakuを使って計算する）
-    const correctedDelta = [...delta];
+    // 今局のリーチ棒分（各プレイヤーがリーチで出した-1000）をdeltaに組み込む
+    // リーチ者はこの局で-1000を払っているので、それをdeltaに反映する
+    const riichiDelta = players.map((_, i) => rs[i] === "riichi" ? -1000 : 0);
+
+    // 供託の処理
+    const correctedDelta = delta.map((d, i) => d + riichiDelta[i]);
+    let newKyotakuPoints = kyotakuPoints;
+
+    if (info.type === "tsumo" || info.type === "ron") {
+      // 和了者を特定（deltaがプラスの人）
+      const winnerIdx = delta.findIndex((d, i) => d > 0);
+      if (winnerIdx >= 0) {
+        // 全供託（前局以前の供託 + 今局のリーチ棒すべて）を和了者に加算
+        correctedDelta[winnerIdx] += kyotakuPoints;
+        newKyotakuPoints = 0;
+      }
+    }
+    // 流局・チョンボ時は供託持ち越し（kyotakuPointsはそのまま）
 
     const newPoints = basePoints.map((p, i) => p + (correctedDelta[i] ?? 0));
-    const newRound = { delta: correctedDelta, info, roundLabel: ri,
+
+    // roundLabelは局開始時の供託本数を記録する（リーチ前の本数）
+    // cr.kyotakuは局開始時の本数、今局のリーチは含まない
+    const preRiichiKyotaku = cr.kyotaku - rs.filter(s => s === "riichi").length;
+    const roundLabel = `${wl}${cr.round}局 ${cr.honba}本場 供託${Math.max(0,preRiichiKyotaku)}本`;
+
+    const newRound = {
+      delta: correctedDelta, info, roundLabel,
       roundStatus: [...rs],
-      riichiOrder: [...riichiOrder],   // リーチ順番を保存
-      fuuroCount: [...fuuroCount],     // 副露回数を保存
+      riichiOrder: [...riichiOrder],
+      fuuroCount: [...fuuroCount],
     };
-    const updatedGs = { ...gs, points: newPoints, rounds: [...baseRounds, newRound],
+    const updatedGs = {
+      ...gs, points: newPoints, rounds: [...baseRounds, newRound],
       roundStatus: players.map(() => null),
-      fuuroCount: players.map(() => 0),  // 毎局リセット
-      riichiOrder: [],                   // 毎局リセット
+      fuuroCount: players.map(() => 0),
+      riichiOrder: [],
+      kyotakuPoints: newKyotakuPoints,
     };
 
     let nr = { ...cr };
-    if (info.renchon) { nr.honba += 1; }
-    else {
+    const thisRoundRiichiCount = rs.filter(s => s === "riichi").length;
+    // 次の局の供託本数
+    // 和了: 全て和了者へ渡るので0
+    // 流局: 今局のリーチ棒も含めて持ち越し（cr.kyotakuはリーチ棒込みの本数）
+    // renchon(連荘): 本場+1、供託はそのまま持ち越し
+    if (info.renchon) {
+      nr.honba += 1;
+      // 供託はそのまま（kyotakuは変えない）
+    } else {
       nr.honba = info.ryukyoku ? nr.honba + 1 : 0;
-      nr.kyotaku = info.ryukyoku ? nr.kyotaku : 0;
+      if (info.ryukyoku) {
+        // 流局: 今局のリーチ棒も加えた本数を持ち越し
+        nr.kyotaku = cr.kyotaku; // cr.kyotakuは既にリーチ棒込み
+      } else {
+        // 和了・チョンボ: 供託は0
+        nr.kyotaku = 0;
+      }
       if (!info.ryukyoku || !info.oyaTenpai) {
         nr.round += 1;
         if (nr.round > 4) { nr.round = 1; nr.wind += 1; }
@@ -1310,9 +1490,16 @@ function GameScreen({ gameState, setGameState, onFinish }) {
     const shouldEnd = roundOver || tobi;
 
     if (shouldEnd) {
-      // あがりやめ判定: 最終局で親がリーチorあがりの場合
+      // 終局時: 残った供託はトップに渡す
+      const finalPoints = [...newPoints];
+      const remainingKyotaku = newKyotakuPoints; // 流局などで残った供託
+      if (remainingKyotaku > 0) {
+        const topIdx = finalPoints.reduce((mi, v, i) => v > finalPoints[mi] ? i : mi, 0);
+        finalPoints[topIdx] += remainingKyotaku;
+      }
+      const finalGs = { ...updatedGs, points: finalPoints, kyotakuPoints: 0 };
       const isAgariYame = wasLastRound && info.renchon && !info.ryukyoku;
-      setPending({ gs: updatedGs, agariYame: isAgariYame });
+      setPending({ gs: finalGs, agariYame: isAgariYame });
       setModal("end_confirm");
     } else { setGameState(updatedGs); setModal(null); }
   };
@@ -1351,10 +1538,12 @@ function GameScreen({ gameState, setGameState, onFinish }) {
   };
 
   return (
-    <div className="scr fade" style={{padding:"10px 10px 20px"}}>
+    <div className="scr fade" style={{padding:"0 10px 20px", display:"flex", flexDirection:"column", alignItems:"center"}}>
+      <AppTopBar/>
       {/* 直近24時間の対戦結果 */}
       <Recent24h games={gs.allGames||[]} players={players}/>
-      <div style={{textAlign:"center",fontSize:13,fontWeight:700,color:"var(--tx2)",marginBottom:7}}>{ri}</div>
+      {/* 現在の局名（卓の上） */}
+      <div style={{textAlign:"center",fontSize:13,fontWeight:700,color:"var(--tx2)",margin:"6px 0 5px",width:"100%"}}>{ri}</div>
       <div className="tw">
         <div className="tbg">
           {/* SVG麻雀卓 - 参考画像に忠実に再現 */}
@@ -1529,7 +1718,7 @@ function GameScreen({ gameState, setGameState, onFinish }) {
       {modal==="wi" && selP!==null && (
         <WinInputModal players={players} selP={selP} winType={winType} ronTarget={ronTarget}
           isOya={isOya(selP)} oyaIdx={oyaIdx} playerStatus={rs[selP]}
-          honba={cr.honba} kyotaku={prevKyotaku} settings={settings}
+          honba={cr.honba} kyotaku={0} settings={settings}
           riichiOrderInRound={riichiOrder.find(o=>o.pIdx===selP)?.orderInRound ?? null}
           onConfirm={(d,info)=>applyResult(d,{...info,renchon:selP===oyaIdx})}
           onBack={()=>setModal(winType==="ron"?"rt":"wt")}/>
@@ -1556,7 +1745,7 @@ function GameScreen({ gameState, setGameState, onFinish }) {
       )}
       {modal==="dr_in" && (
         <DoubleRonModal players={players} winners={selPs} ronTarget={ronTarget} oyaIdx={oyaIdx}
-          roundStatus={rs} honba={cr.honba} kyotaku={cr.kyotaku}
+          roundStatus={rs} honba={cr.honba} kyotaku={0}
           onConfirm={(d,info)=>applyResult(d,{...info,renchon:selPs.some(w=>isOya(w))})}
           onBack={()=>setModal("dr_rt")}/>
       )}
@@ -1659,6 +1848,7 @@ function WinInputModal({ players, selP, winType, ronTarget, isOya, oyaIdx, playe
   const defaultFuVal = isFu ? 30 : (winType === "tsumo" ? 30 : 40);
 
   const defaultYaku = () => {
+    if (isRi && winType === "tsumo") return ["riichi", "menzen_tsumo"];
     if (isRi) return ["riichi"];
     if (!isFu && winType === "tsumo") return ["menzen_tsumo"];
     return [];
@@ -2033,18 +2223,16 @@ function HistoryScreen({ games, onDeleteGame, onDeleteAll, viewing, setViewing }
 
   return(
     <div className="scr fade">
-      <div className="topbar" style={{marginBottom:11}}>
-        <div className="tt">履歴</div>
+      <AppTopBar title="履歴" right={
         <div style={{display:"flex",gap:5,alignItems:"center"}}>
           <button className="btn bsm bg" style={{fontSize:11}} onClick={()=>exportSummaryCSV(games)}>概要CSV</button>
           <button className="btn bsm bg" style={{fontSize:11}} onClick={()=>exportDetailCSV(games)}>詳細CSV</button>
           <label style={{background:"var(--s3)",border:"1px solid var(--bd)",borderRadius:"var(--rs)",
             padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",color:"var(--tx)"}}>
-            取込
-            <input type="file" accept=".csv" style={{display:"none"}} onChange={handleImport}/>
+            取込<input type="file" accept=".csv" style={{display:"none"}} onChange={handleImport}/>
           </label>
         </div>
-      </div>
+      }/>
       {confirmClear&&(
         <div style={{background:"var(--s2)",border:"1px solid var(--minus)",borderRadius:12,padding:14,marginBottom:12}}>
           <div style={{fontSize:13,marginBottom:10,color:"var(--tx)"}}>全ての対局履歴を削除しますか？この操作は元に戻せません。</div>
@@ -2117,11 +2305,7 @@ function GameResultScreen({ game, onBack }) {
   const ranked = [...fins.map((v,i)=>({v,i}))].sort((a,b)=>b.v-a.v);
   return(
     <div className="scr fade">
-      <div className="topbar" style={{marginBottom:7}}>
-        <button className="ib" onClick={onBack}>←</button>
-        <div className="tt">対局結果</div>
-        <div style={{width:33}}/>
-      </div>
+      <AppTopBar title="履歴" right={<button className="ib" onClick={onBack}>← 戻る</button>}/>
       <div style={{textAlign:"center",color:"var(--tx2)",fontSize:11,marginBottom:9}}>{game.date}</div>
       <div className="tabs">
         {["result","history"].map(t=>(
@@ -2206,6 +2390,13 @@ function StatsScreen({ games }) {
 
   const pg = filteredGames.filter(g=>g.players.includes(sel));
   const st = allStats[sel];
+  // 総ポイントはここで計算
+  const totalScorePts = pg.reduce((sum,g)=>{
+    const pi=g.players.indexOf(sel); if(pi<0) return sum;
+    const fp=g.players.map((_,i)=>g.rounds.reduce((s,r)=>s+(r.delta[i]??0),g.settings.startPoints));
+    const fins=calcFinalScore(fp,g.settings,g.rounds);
+    return sum+fins[pi];
+  }, 0);
 
   const medal = (key, higherIsBetter=true) => {
     const vals = allP.map(p=>({p,v:allStats[p]?.[key]??null})).filter(x=>x.v!==null&&isFinite(x.v));
@@ -2231,24 +2422,41 @@ function StatsScreen({ games }) {
 
   const shareStats = () => {
     if(!st) return;
-    const text = [
-      `【${sel} 麻雀統計】`,
-      `${st.games}対局 平均順位${f1(st.avgRank)}位 平均${f1(st.avgScore)}pt`,
-      `和了率${f1(st.horaRate)}% 放銃率${f1(st.dealRate)}%`,
-      `リーチ率${f1(st.riichiRate)}% 副露率${f1(st.fuuroRate)}%`,
-      `先制リーチ率${f1(st.firstRiichiRate)}% リーチ成功率${f1(st.riichiWinRate)}%`,
-      `調整打点効率${f1(st.adjustedEff)} 偶発恩恵${Math.round(st.luckyBonus).toLocaleString()}点`,
+    const lines = [
+      `【${sel} 雀録MJ-LOG 統計】`,
+      `期間: ${period==="all"?"全期間":period==="week"?"1週間":period==="month"?"1ヶ月":period==="3month"?"3ヶ月":"カスタム"}`,
+      ``,
+      `▼ 成績`,
+      `${st.games}対局 ${st.tr}局`,
+      `平均順位: ${f1(st.avgRank)}位　平均ポイント: ${f1(st.avgScore)}pt`,
+      `連帯率: ${f1(st.rentai)}%　トビ率: ${f1(st.tobi)}%`,
+      `順位: 1位×${st.ranks[0]} 2位×${st.ranks[1]} 3位×${st.ranks[2]} 4位×${st.ranks[3]}`,
+      ``,
+      `▼ 基本統計`,
+      `和了率: ${f1(st.horaRate)}%(${st.wins}回)　放銃率: ${f1(st.dealRate)}%(${st.deals}回)`,
+      `リーチ率: ${f1(st.riichiRate)}%　副露率: ${f1(st.fuuroRate)}%`,
+      `平均打点: ${Math.round(st.avgWin).toLocaleString()}点`,
+      `└リーチ: ${Math.round(st.avgRWin).toLocaleString()}点 副露: ${Math.round(st.avgFWin).toLocaleString()}点`,
+      ``,
+      `▼ リーチ統計`,
+      `先制リーチ率: ${f1(st.firstRiichiRate)}%`,
+      `成功率: ${f1(st.riichiWinRate)}%　後放銃率: ${f1(st.riichiDealRate)}%`,
+      `一発率: ${f1(st.ippatsuRate)}%　裏ドラ平均: ${f1(st.avgUra)}枚`,
+      ``,
+      `▼ 詳細統計`,
+      `打点効率: ${f1(st.scoringEff)}　放銃点損失: ${f1(st.dealLoss)}`,
+      `調整打点効率: ${f1(st.adjustedEff)}`,
+      `局収支: ${Math.round(st.roundIncome).toLocaleString()}点/局`,
+      `偶発恩恵: ${f1(st.luckyBonus)}点/対局`,
     ].join("\n");
-    if(navigator.share) { navigator.share({title:"麻雀統計",text}); }
-    else { navigator.clipboard?.writeText(text).then(()=>alert("コピーしました")); }
+    if(navigator.share) { navigator.share({title:"雀録MJ-LOG 統計",text:lines}); }
+    else if(navigator.clipboard) { navigator.clipboard.writeText(lines).then(()=>alert("コピーしました")); }
+    else { alert(lines); }
   };
 
   return(
     <div className="scr fade">
-      <div className="topbar" style={{marginBottom:11}}>
-        <div className="tt">集計</div>
-        <button className="btn bsm bg" onClick={shareStats}>共有</button>
-      </div>
+      <AppTopBar title="集計" right={<button className="btn bsm bg" onClick={shareStats}>共有</button>}/>
       <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:10}}>
         {allP.map(p=>(
           <button key={p} onClick={()=>setSel(p)}
@@ -2286,8 +2494,10 @@ function StatsScreen({ games }) {
       {(!st||pg.length===0) ? <div className="empty">この期間の対局記録がありません</div> : (<>
       <div className="card">
         <div className="chd">{sel} — {st.games}対局</div>
+        <SR label="総ポイント" value={`${f1(st.games>0?totalScorePts:0)}`} mKey="totalScore"/>
         <SR label="平均順位" value={`${f1(st.avgRank)}位`} mKey="avgRank" higherBetter={false}/>
         <SR label="平均ポイント" value={`${f1(st.avgScore)}`} mKey="avgScore"/>
+        <SR label="平均素点" value={`${Math.round(st.avgFinalPts??0).toLocaleString()}点`} mKey="avgFinalPts"/>
         <SR label="連帯率（1〜2位）" value={`${f1(st.rentai)}%`} mKey="rentai"/>
         <SR label="トビ率" value={`${f1(st.tobi)}%`} mKey="tobi" higherBetter={false}/>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,padding:"10px 14px"}}>
@@ -2367,8 +2577,10 @@ function StatsScreen({ games }) {
         <SR label="打点効率" value={f1(st.scoringEff)} sub="平均和了点×和了率" mKey="scoringEff"/>
         <SR label="放銃点損失" value={f1(st.dealLoss)} sub="平均放銃点×放銃率" mKey="dealLoss" higherBetter={false}/>
         <SR label="調整打点効率" value={f1(st.adjustedEff)} sub="打点効率−放銃点損失" mKey="adjustedEff"/>
-        <SR label="局収支" value={`${Math.round(st.roundIncome).toLocaleString()}点`} sub="(最終点数平均−初期点数)×対局数/総局数" mKey="roundIncome"/>
-        <SR label="偶発恩恵" value={`${Math.round(st.luckyBonus).toLocaleString()}点`} sub="実際収支−役なし時収支" mKey="luckyBonus"/>
+        <SR label="局収支" value={`${Math.round(st.roundIncome).toLocaleString()}点`}
+          sub="(最終点合計−初期点×対局数)/総局数" mKey="roundIncome"/>
+        <SR label="偶発恩恵" value={`${f1(st.luckyBonus)}点/対局`}
+          sub="(実際収支−役なし時収支)÷総対局数" mKey="luckyBonus"/>
       </div>
       </>)}
     </div>
@@ -2380,6 +2592,7 @@ function calcStats(player, games) {
   const allR=[];
   let totalFinalPts=0, totalStartPts=0;
   let totalScorePts=0; // ポイント合計
+  let totalGames=0, tonpuCount=0, hanchanCount=0;
 
   games.forEach(g=>{
     const pi=g.players.indexOf(player); if(pi<0) return;
@@ -2391,6 +2604,8 @@ function calcStats(player, games) {
     totalFinalPts+=fp[pi];
     totalStartPts+=g.settings.startPoints;
     totalScorePts+=fins[pi];
+    totalGames++;
+    if(g.settings.gameType==="tonpu") tonpuCount++; else hanchanCount++;
     g.rounds.forEach(r=>allR.push({r,pi,g}));
   });
 
@@ -2433,12 +2648,44 @@ function calcStats(player, games) {
   const scoringEff=avgWin*horaRate/100;
   const dealLoss=avgDeal*dealRate/100;
   const adjustedEff=scoringEff-dealLoss;
-  const roundIncome=tr>0?(totalFinalPts-totalStartPts)/tr*n:0;
+  // 局収支: (最終点数合計 - 初期点数×対局数) / 総局数
+  const roundIncome = tr>0 ? (totalFinalPts - totalStartPts * totalGames) / tr : 0;
+  // 平均素点: 最終持ち点の平均
+  const avgFinalPts = totalGames>0 ? totalFinalPts / totalGames : 0;
 
-  // 偶発恩恵: 実際の総delta - 役なし(baseScore)の総delta
-  const actualTotal=wins.reduce((s,{r,pi})=>s+r.delta[pi],0);
-  const baseTotal=wins.reduce((s,{r,pi})=>s+(r.info?.baseScore??r.delta[pi]),0);
-  const luckyBonus=actualTotal-baseTotal;
+  // 偶発恩恵: (実際収支 - 役なし時収支) ÷ 総対局数
+  // あがり時: 実際点数 - baseScore（役なし点数）
+  // 放銃時: 実際失点 - 役なし時の失点（baseScoreがない場合は差分0）
+  // ロン放銃: 放銃された点数のうち特殊役・裏ドラ分はbaseScoreがない → 差分として計上
+  let luckyBonusTotal = 0;
+  allR.forEach(({r, pi}) => {
+    if (!r.info?.type) return;
+    const actual = r.delta[pi];
+    let base = actual; // デフォルト: 差分なし
+    if (r.info.type === "tsumo" || r.info.type === "ron") {
+      const winnerIdx = r.delta.findIndex((d,i) => d > 0);
+      if (pi === winnerIdx) {
+        // 和了者: 実際得点 - baseScore
+        base = r.info.baseScore ?? actual;
+      } else if (r.info.type === "ron" && r.info.from === pi) {
+        // 放銃者: 役なし時の放銃点を推定（baseScoreを使って比率で計算）
+        // 実際放銃点に対してbaseScore/actualWin の比率を適用
+        const actualWin = r.delta[winnerIdx] ?? 0;
+        if (actualWin > 0 && r.info.baseScore) {
+          base = Math.round(actual * r.info.baseScore / actualWin);
+        }
+      }
+      // ツモの払い手も同様に比率計算
+      else if (r.info.type === "tsumo") {
+        const actualWin = r.delta[winnerIdx] ?? 0;
+        if (actualWin > 0 && r.info.baseScore) {
+          base = Math.round(actual * r.info.baseScore / actualWin);
+        }
+      }
+    }
+    luckyBonusTotal += (actual - base);
+  });
+  const luckyBonus = n > 0 ? luckyBonusTotal / n : 0;
 
   return{
     games:n, tr,
@@ -2461,7 +2708,7 @@ function calcStats(player, games) {
     totalUra, avgUra:rR.length?totalUra/rR.length:0,
     totalDora, avgDora:wins.length?totalDora/wins.length:0,
     totalAka,  avgAka:wins.length?totalAka/wins.length:0,
-    scoringEff, dealLoss, adjustedEff, roundIncome,
+    scoringEff, dealLoss, adjustedEff, roundIncome, avgFinalPts,
     fuuroByCount,
     luckyBonus,
   };
@@ -2496,15 +2743,11 @@ function PieChart({ segs }) {
 }
 
 // ===================== SETTINGS SCREEN =====================
-function SettingsScreen({ settings, setSettings, members, setMembers, userEmail, onSignOut }) {
+function SettingsScreen({ settings, setSettings, members, setMembers, games, userEmail, onSignOut }) {
   const [newName, setNewName] = useState("");
   return(
     <div className="scr fade">
-      <div className="topbar" style={{marginBottom:11}}>
-        <div className="tt">設定</div>
-        <button className="btn bsm" style={{background:"var(--minus)",color:"#fff",fontSize:11}}
-          onClick={onSignOut}>ログアウト</button>
-      </div>
+      <AppTopBar title="設定" right={<button className="btn bsm" style={{background:"var(--minus)",color:"#fff",fontSize:11}} onClick={onSignOut}>ログアウト</button>}/>
       {/* アカウント情報 */}
       <div className="card" style={{marginBottom:10}}>
         <div className="chd">アカウント</div>
@@ -2522,7 +2765,13 @@ function SettingsScreen({ settings, setSettings, members, setMembers, userEmail,
             <input value={m} onChange={e=>{const nm=[...members];nm[i]=e.target.value;setMembers(nm);}}
               style={{flex:1,background:"transparent",border:"none",borderBottom:"1px solid var(--bd)",
                 color:"var(--tx)",fontFamily:"inherit",fontSize:14,fontWeight:700,padding:"2px 0"}}/>
-            <button onClick={()=>setMembers(p=>p.filter((_,j)=>j!==i))}
+            <button onClick={()=>{
+                const hasData = games && games.some(g=>g.players.includes(m));
+                if(hasData){
+                  if(!window.confirm(`「${m}」の対局記録が存在します。\n削除しても記録は残りますが、集計などで名前が表示されます。\n削除してよろしいですか？`)) return;
+                }
+                setMembers(p=>p.filter((_,j)=>j!==i));
+              }}
               style={{background:"none",border:"none",color:"var(--minus)",fontSize:15,cursor:"pointer",padding:"0 3px"}}>✕</button>
           </div>
         ))}
