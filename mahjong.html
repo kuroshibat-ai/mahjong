@@ -834,16 +834,22 @@ function App() {
     }
   }, []);
 
-  // タブがフォーカスされた時に対局データを再同期（複数端末対応）
+  // visibilitychangeで再同期（iOS PWAのfocusイベント非発火対策）
   useEffect(() => {
-    const onFocus = () => {
+    const onVisible = () => {
       const saved = loadSession();
       if (saved?.access_token && !gameState) {
-        sb.getGames(saved.access_token).then(g => setGames(g)).catch(()=>{});
+        sb.getGames(saved.access_token).then(g => { if(g.length>0) setGames(g); }).catch(()=>{});
       }
     };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") onVisible();
+    });
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, [gameState]);
 
   const loadUserData = async (token) => {
