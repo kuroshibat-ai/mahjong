@@ -173,9 +173,10 @@ function getLimit(han, fu, kiriage=true) {
   if (han >= 8)  return LIMITS.find(l => l.key === "baiman");
   if (han >= 6)  return LIMITS.find(l => l.key === "hanemangan");
   if (han >= 5)  return LIMITS.find(l => l.key === "mangan");
-  if (han === 4 && fu >= 30) return LIMITS.find(l => l.key === "mangan");
+  // 通常満貫（常に）
+  if (han === 4 && fu >= 40) return LIMITS.find(l => l.key === "mangan");
   if (han === 3 && fu >= 70) return LIMITS.find(l => l.key === "mangan");
-  // 繰り上げ満貫
+  // 繰り上げ満貫（kirageオンのみ）
   if (kiriage) {
     if (han === 4 && fu === 30) return LIMITS.find(l => l.key === "mangan");
     if (han === 3 && fu === 60) return LIMITS.find(l => l.key === "mangan");
@@ -883,7 +884,15 @@ function App() {
     setSyncing(false);
   };
 
-  const handleSignOut = async () => {
+  const handleRefresh = async () => {
+    if (!session) return;
+    setSyncing(true);
+    try {
+      const g = await sb.getGames(session.access_token);
+      setGames(g);
+    } catch(e) { console.error(e); }
+    setSyncing(false);
+  };
     if (session) await sb.signOut(session.access_token);
     setSession(null);
     saveSession(null);
@@ -978,8 +987,9 @@ function App() {
         {tab==="game" && gameState && <GameScreen gameState={{...gameState,allGames:games}} setGameState={setGameState} onFinish={finishGame}/>}
         {tab==="history" && <HistoryScreen games={games}
           onDeleteGame={handleDeleteGame} onDeleteAll={handleDeleteAllGames}
+          onRefresh={handleRefresh}
           viewing={viewingGame} setViewing={setViewingGame}/>}
-        {tab==="stats" && <StatsScreen games={games}/>}
+        {tab==="stats" && <StatsScreen games={games} onRefresh={handleRefresh}/>}
         {tab==="settings" && <SettingsScreen settings={settings} setSettings={setSettings}
           members={members} setMembers={setMembers} games={games}
           userEmail={session.user.email} onSignOut={handleSignOut}/>}
@@ -1204,6 +1214,13 @@ function SetupScreen({ members, settings, onStart }) {
     if (oyaIdx === i) setOyaIdx(i-1);
     else if (oyaIdx === i-1) setOyaIdx(i);
   };
+  const moveDown = (i) => {
+    if (i === sel.length-1) return;
+    const ns = [...sel]; [ns[i],ns[i+1]] = [ns[i+1],ns[i]];
+    setSel(ns);
+    if (oyaIdx === i) setOyaIdx(i+1);
+    else if (oyaIdx === i+1) setOyaIdx(i);
+  };
 
   return (
     <div className="scr fade">
@@ -1223,14 +1240,20 @@ function SetupScreen({ members, settings, onStart }) {
 
       {sel.length > 0 && (
         <div className="card">
-          <div className="chd">席順・東家<span style={{fontSize:10,color:"var(--tx3)"}}>↑並替え ／ 丸タップで東家</span></div>
+          <div className="chd">席順・東家<span style={{fontSize:10,color:"var(--tx3)"}}>↑↓並替え ／ 丸タップで東家</span></div>
           {sel.map((name, i) => {
             const wl = ["東","南","西","北"][(i - oyaIdx + 4) % 4];
             return (
               <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 13px",
                 borderBottom:i<sel.length-1?"1px solid var(--bd)":"none"}}>
-                <button onClick={() => moveUp(i)} disabled={i===0}
-                  style={{background:"none",border:"none",cursor:"pointer",color:"var(--tx3)",fontSize:15,padding:"2px 4px"}}>↑</button>
+                <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                  <button onClick={() => moveUp(i)} disabled={i===0}
+                    style={{background:"none",border:"none",cursor:i===0?"default":"pointer",
+                      color:i===0?"var(--bd)":"var(--tx3)",fontSize:13,padding:"1px 4px",lineHeight:1}}>↑</button>
+                  <button onClick={() => moveDown(i)} disabled={i===sel.length-1}
+                    style={{background:"none",border:"none",cursor:i===sel.length-1?"default":"pointer",
+                      color:i===sel.length-1?"var(--bd)":"var(--tx3)",fontSize:13,padding:"1px 4px",lineHeight:1}}>↓</button>
+                </div>
                 <button onClick={() => setOyaIdx(i)}
                   style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:"pointer",fontFamily:"inherit",
                     background:i===oyaIdx?"var(--gold)":"var(--s3)",
@@ -1256,6 +1279,7 @@ function SetupScreen({ members, settings, onStart }) {
             settings.tobiEnd?"箱下あり":"箱下なし",
             settings.doubleRon?"ダブロンあり":"頭ハネ",
             settings.nyu?(settings.gameType==="tonpu"?"南入あり":"西入あり"):(settings.gameType==="tonpu"?"南入なし":"西入なし"),
+            (settings.kiriage??true)?"繰り上げ満貫あり":"繰り上げ満貫なし",
             settings.yakitori?`焼き鳥${settings.yakitori}`:null,
             settings.tobiBonus?`トビ賞${settings.tobiBonus}`:null,
           ].filter(Boolean).map((t,i) => (
@@ -1498,10 +1522,9 @@ function GameScreen({ gameState, setGameState, onFinish }) {
     if (shouldEnd) {
       // 終局時: 残った供託はトップに渡す
       const finalPoints = [...newPoints];
-      const remainingKyotaku = newKyotakuPoints; // 流局などで残った供託
-      if (remainingKyotaku > 0) {
+      if (newKyotakuPoints > 0) {
         const topIdx = finalPoints.reduce((mi, v, i) => v > finalPoints[mi] ? i : mi, 0);
-        finalPoints[topIdx] += remainingKyotaku;
+        finalPoints[topIdx] += newKyotakuPoints;
       }
       const finalGs = { ...updatedGs, points: finalPoints, kyotakuPoints: 0 };
       const isAgariYame = wasLastRound && info.renchon && !info.ryukyoku;
@@ -1516,12 +1539,17 @@ function GameScreen({ gameState, setGameState, onFinish }) {
       (acc, r) => acc.map((v, i) => v + (r.delta[i] ?? 0)),
       players.map(() => settings.startPoints)
     );
-
     // 修正する局のroundLabelから局情報を復元
-    // roundLabel例: "東3局 2本場 供託1本"
     const targetLabel = gs.rounds[roundIdx]?.roundLabel ?? "";
     const windMap = {"東":0,"南":1,"西":2,"北":3};
     const match = targetLabel.match(/([東南西北])(\d+)局\s*(\d+)本場\s*供託(\d+)本/);
+    // 修正前の供託点数を計算（その局までのリーチ棒合計）
+    const revKyotaku = revRounds.reduce((s, r) => {
+      if (r.info?.type) return 0; // 和了後は0
+      if (r.info?.ryukyoku) return s + (r.roundStatus?.filter(x=>x==="riichi").length ?? 0);
+      return s;
+    }, 0) * 1000;
+
     let restoredRound;
     if (match) {
       restoredRound = {
@@ -1529,17 +1557,18 @@ function GameScreen({ gameState, setGameState, onFinish }) {
         round: parseInt(match[2]),
         honba: parseInt(match[3]),
         kyotaku: parseInt(match[4]),
+        dealerStart: gs.currentRound.dealerStart ?? 0, // dealerStartを引き継ぐ
       };
     } else {
-      // fallback: 局数から計算（連荘なし仮定）
       const w = Math.floor(roundIdx / 4), r2 = (roundIdx % 4) + 1;
-      restoredRound = { wind:w, round:r2, honba:0, kyotaku:0 };
+      restoredRound = { wind:w, round:r2, honba:0, kyotaku:0, dealerStart: gs.currentRound.dealerStart ?? 0 };
     }
 
     setGameState({ ...gs, rounds: revRounds, points: revPoints,
       roundStatus: players.map(() => null),
       fuuroCount: players.map(() => 0),
       riichiOrder: [],
+      kyotakuPoints: revKyotaku,
       currentRound: restoredRound });
   };
 
@@ -2208,7 +2237,7 @@ function Modal({ title, onClose, children }) {
 }
 
 // ===================== HISTORY SCREEN =====================
-function HistoryScreen({ games, onDeleteGame, onDeleteAll, viewing, setViewing }) {
+function HistoryScreen({ games, onDeleteGame, onDeleteAll, onRefresh, viewing, setViewing }) {
   const [confirmClear, setConfirmClear] = useState(false);
 
   if (viewing) return <GameResultScreen game={viewing} onBack={()=>setViewing(null)}/>;
@@ -2231,6 +2260,7 @@ function HistoryScreen({ games, onDeleteGame, onDeleteAll, viewing, setViewing }
     <div className="scr fade">
       <AppTopBar title="履歴" right={
         <div style={{display:"flex",gap:5,alignItems:"center"}}>
+          <button className="btn bsm bg" style={{fontSize:11}} onClick={onRefresh}>↺</button>
           <button className="btn bsm bg" style={{fontSize:11}} onClick={()=>exportSummaryCSV(games)}>概要CSV</button>
           <button className="btn bsm bg" style={{fontSize:11}} onClick={()=>exportDetailCSV(games)}>詳細CSV</button>
           <label style={{background:"var(--s3)",border:"1px solid var(--bd)",borderRadius:"var(--rs)",
@@ -2360,7 +2390,7 @@ function GameResultScreen({ game, onBack }) {
 }
 
 // ===================== STATS SCREEN =====================
-function StatsScreen({ games }) {
+function StatsScreen({ games, onRefresh }) {
   const allP = [...new Set(games.flatMap(g=>g.players))];
   const [sel, setSel] = useState(allP[0]??null);
   const [period, setPeriod] = useState("all");
@@ -2390,8 +2420,16 @@ function StatsScreen({ games }) {
   const filteredGames = games.filter(filterGame);
   const allStats = {};
   allP.forEach(p => {
-    const pg = filteredGames.filter(g=>g.players.includes(p));
-    if(pg.length>0) allStats[p] = calcStats(p, pg);
+    const pg2 = filteredGames.filter(g=>g.players.includes(p));
+    if(pg2.length>0) {
+      const s = calcStats(p, pg2);
+      s.totalScore = pg2.reduce((sum,g)=>{
+        const pi=g.players.indexOf(p); if(pi<0) return sum;
+        const fp=g.players.map((_,i)=>g.rounds.reduce((acc,r)=>acc+(r.delta[i]??0),g.settings.startPoints));
+        return sum+calcFinalScore(fp,g.settings,g.rounds)[pi];
+      }, 0);
+      allStats[p] = s;
+    }
   });
 
   const pg = filteredGames.filter(g=>g.players.includes(sel));
@@ -2462,7 +2500,12 @@ function StatsScreen({ games }) {
 
   return(
     <div className="scr fade">
-      <AppTopBar title="集計" right={<button className="btn bsm bg" onClick={shareStats}>共有</button>}/>
+      <AppTopBar title="集計" right={
+        <div style={{display:"flex",gap:5}}>
+          <button className="btn bsm bg" onClick={onRefresh}>↺</button>
+          <button className="btn bsm bg" onClick={shareStats}>共有</button>
+        </div>
+      }/>
       <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:10}}>
         {allP.map(p=>(
           <button key={p} onClick={()=>setSel(p)}
@@ -2500,7 +2543,7 @@ function StatsScreen({ games }) {
       {(!st||pg.length===0) ? <div className="empty">この期間の対局記録がありません</div> : (<>
       <div className="card">
         <div className="chd">{sel} — {st.games}対局</div>
-        <SR label="総ポイント" value={`${f1(st.games>0?totalScorePts:0)}`} mKey="totalScore"/>
+        <SR label="総ポイント" value={`${f1(totalScorePts)}`} mKey="totalScore"/>
         <SR label="平均順位" value={`${f1(st.avgRank)}位`} mKey="avgRank" higherBetter={false}/>
         <SR label="平均ポイント" value={`${f1(st.avgScore)}`} mKey="avgScore"/>
         <SR label="平均素点" value={`${Math.round(st.avgFinalPts??0).toLocaleString()}点`} mKey="avgFinalPts"/>
@@ -2585,7 +2628,7 @@ function StatsScreen({ games }) {
         <SR label="調整打点効率" value={f1(st.adjustedEff)} sub="打点効率−放銃点損失" mKey="adjustedEff"/>
         <SR label="局収支" value={`${Math.round(st.roundIncome).toLocaleString()}点`}
           sub="(最終点合計−初期点×対局数)/総局数" mKey="roundIncome"/>
-        <SR label="偶発恩恵" value={`${f1(st.luckyBonus)}点/対局`}
+        <SR label="偶発恩恵" value={`${f1(st.luckyBonus)}点`}
           sub="(実際収支−役なし時収支)÷総対局数" mKey="luckyBonus"/>
       </div>
       </>)}
