@@ -744,6 +744,13 @@ const sb = {
     "Content-Type": "application/json",
   }),
 
+  async refreshToken(refreshToken) {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method:"POST", headers: sb.headers,
+      body: JSON.stringify({refresh_token: refreshToken}),
+    });
+    return r.json();
+  },
   async signUp(email, password) {
     const r = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
       method:"POST", headers: sb.headers,
@@ -826,13 +833,40 @@ function App() {
 
   // 起動時：保存済みセッションを復元
   useEffect(() => {
-    const saved = loadSession();
-    if (saved?.access_token && saved?.user) {
-      setSession(saved);
-      loadUserData(saved.access_token);
-    } else {
-      setAuthLoading(false);
-    }
+    const init = async () => {
+      const saved = loadSession();
+      if (!saved?.access_token) { setAuthLoading(false); return; }
+
+      // まずそのままデータ取得を試みる
+      try {
+        await loadUserData(saved.access_token);
+        setSession(saved);
+      } catch(e) {
+        // 失敗した場合、refresh_tokenで再取得を試みる
+        if (saved.refresh_token) {
+          try {
+            const res = await sb.refreshToken(saved.refresh_token);
+            if (res.access_token) {
+              const newSess = {
+                access_token: res.access_token,
+                refresh_token: res.refresh_token,
+                user: res.user ?? saved.user,
+              };
+              setSession(newSess);
+              saveSession(newSess);
+              await loadUserData(res.access_token);
+            } else {
+              setAuthLoading(false);
+            }
+          } catch(e2) {
+            setAuthLoading(false);
+          }
+        } else {
+          setAuthLoading(false);
+        }
+      }
+    };
+    init();
   }, []);
 
   // visibilitychangeで再同期（iOS PWAのfocusイベント非発火対策）
@@ -862,8 +896,14 @@ function App() {
         if (profile.settings && Object.keys(profile.settings).length) setSettings(s => ({...s, ...profile.settings}));
       }
       const gamesData = await sb.getGames(token);
+      // 401エラーチェック（配列でなければ認証エラー）
+      if (!Array.isArray(gamesData)) throw new Error("auth_error");
       setGames(gamesData);
-    } catch(e) { console.error("データ読込エラー:", e); }
+    } catch(e) {
+      setSyncing(false);
+      setAuthLoading(false);
+      throw e; // 呼び出し元でcatchできるように再スロー
+    }
     setSyncing(false);
     setAuthLoading(false);
   };
@@ -874,7 +914,11 @@ function App() {
       ? await sb.signUp(email, password)
       : await sb.signIn(email, password);
     if (res.access_token) {
-      const sess = {access_token: res.access_token, user: res.user};
+      const sess = {
+        access_token: res.access_token,
+        refresh_token: res.refresh_token,
+        user: res.user,
+      };
       setSession(sess);
       saveSession(sess);
       await loadUserData(res.access_token);
@@ -931,10 +975,20 @@ function App() {
     setGameState(null);
     setViewingGame(g);
     setTab("history");
-    // クラウドに保存
+
     if (session) {
-      try { await sb.saveGame(session.access_token, session.user.id, g); }
-      catch(e) { console.error("保存エラー:", e); }
+      setSyncing(true);
+      try {
+        await sb.saveGame(session.access_token, session.user.id, g);
+        // 保存成功を確認するため再取得
+        const updated = await sb.getGames(session.access_token);
+        setGames(updated);
+      } catch(e) {
+        console.error("保存エラー:", e);
+        // トークン期限切れの可能性 → 再ログインを促す
+        alert("⚠️ クラウドへの保存に失敗しました。\n一度ログアウトして再ログインしてください。\nデータはこの画面を閉じるまで表示されています。");
+      }
+      setSyncing(false);
     }
   };
 
