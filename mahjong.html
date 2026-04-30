@@ -893,6 +893,8 @@ function App() {
     } catch(e) { console.error(e); }
     setSyncing(false);
   };
+
+  const handleSignOut = async () => {
     if (session) await sb.signOut(session.access_token);
     setSession(null);
     saveSession(null);
