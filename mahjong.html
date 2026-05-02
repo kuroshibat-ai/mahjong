@@ -1303,13 +1303,17 @@ function SetupScreen({ members, settings, onStart }) {
             return (
               <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 13px",
                 borderBottom:i<sel.length-1?"1px solid var(--bd)":"none"}}>
-                <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                <div style={{display:"flex",flexDirection:"column",gap:3}}>
                   <button onClick={() => moveUp(i)} disabled={i===0}
-                    style={{background:"none",border:"none",cursor:i===0?"default":"pointer",
-                      color:i===0?"var(--bd)":"var(--tx3)",fontSize:13,padding:"1px 4px",lineHeight:1}}>↑</button>
+                    style={{background:i===0?"var(--s2)":"var(--s3)",border:"1px solid var(--bd)",
+                      borderRadius:6,cursor:i===0?"default":"pointer",
+                      color:i===0?"var(--bd)":"var(--tx)",fontSize:14,
+                      padding:"4px 9px",lineHeight:1,fontFamily:"inherit"}}>↑</button>
                   <button onClick={() => moveDown(i)} disabled={i===sel.length-1}
-                    style={{background:"none",border:"none",cursor:i===sel.length-1?"default":"pointer",
-                      color:i===sel.length-1?"var(--bd)":"var(--tx3)",fontSize:13,padding:"1px 4px",lineHeight:1}}>↓</button>
+                    style={{background:i===sel.length-1?"var(--s2)":"var(--s3)",border:"1px solid var(--bd)",
+                      borderRadius:6,cursor:i===sel.length-1?"default":"pointer",
+                      color:i===sel.length-1?"var(--bd)":"var(--tx)",fontSize:14,
+                      padding:"4px 9px",lineHeight:1,fontFamily:"inherit"}}>↓</button>
                 </div>
                 <button onClick={() => setOyaIdx(i)}
                   style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:"pointer",fontFamily:"inherit",
@@ -1333,7 +1337,7 @@ function SetupScreen({ members, settings, onStart }) {
             `持ち点${settings.startPoints/1000}k`,
             `返し${settings.returnPoints/1000}k`,
             `ウマ${settings.uma[0]}/${settings.uma[1]}`,
-            settings.tobiEnd?"箱下あり":"箱下なし",
+            settings.tobiEnd?"トビあり":"トビなし",
             settings.doubleRon?"ダブロンあり":"頭ハネ",
             settings.nyu?(settings.gameType==="tonpu"?"南入あり":"西入あり"):(settings.gameType==="tonpu"?"南入なし":"西入なし"),
             (settings.kiriage??true)?"繰り上げ満貫あり":"繰り上げ満貫なし",
@@ -1582,13 +1586,24 @@ function GameScreen({ gameState, setGameState, onFinish }) {
     const shouldEnd = roundOver || tobi;
 
     if (shouldEnd) {
-      // 終局時: 残った供託はトップに渡す
+      // 終局時: 点数合計が初期点数の総和と一致するようトップに調整
+      const totalStart = players.length * settings.startPoints;
       const finalPoints = [...newPoints];
-      if (newKyotakuPoints > 0) {
-        const topIdx = finalPoints.reduce((mi, v, i) => v > finalPoints[mi] ? i : mi, 0);
-        finalPoints[topIdx] += newKyotakuPoints;
+      const finalRounds = [...updatedGs.rounds];
+      const currentSum = finalPoints.reduce(function(s,v){return s+v;}, 0);
+      const diff = totalStart - currentSum; // 供託残りなどのズレ
+      if (diff !== 0) {
+        const topIdx = finalPoints.reduce(function(mi,v,i){return v>finalPoints[mi]?i:mi;}, 0);
+        finalPoints[topIdx] += diff;
+        if (finalRounds.length > 0) {
+          const lastRound = Object.assign({}, finalRounds[finalRounds.length-1]);
+          const newDelta = lastRound.delta.slice();
+          newDelta[topIdx] = (newDelta[topIdx]||0) + diff;
+          lastRound.delta = newDelta;
+          finalRounds[finalRounds.length-1] = lastRound;
+        }
       }
-      const finalGs = { ...updatedGs, points: finalPoints, kyotakuPoints: 0 };
+      const finalGs = Object.assign({}, updatedGs, {points:finalPoints, rounds:finalRounds, kyotakuPoints:0});
       const isAgariYame = wasLastRound && info.renchon && !info.ryukyoku;
       setPending({ gs: finalGs, agariYame: isAgariYame });
       setModal("end_confirm");
@@ -1913,19 +1928,44 @@ function GameScreen({ gameState, setGameState, onFinish }) {
       )}
       {modal==="end_confirm" && pending && (
         <Modal title="対局終了" onClose={()=>{}}>
+          {/* スコアプレビュー */}
+          <div style={{marginBottom:13}}>
+            {(function(){
+              var fp = pending.gs.players.map(function(_,i){
+                return pending.gs.rounds.reduce(function(s,r){return s+(r.delta[i]||0);}, settings.startPoints);
+              });
+              var fins = calcFinalScore(fp, pending.gs.settings, pending.gs.rounds);
+              var ranked = fins.map(function(v,i){return{v:v,i:i};}).sort(function(a,b){return b.v-a.v;});
+              return ranked.map(function(x,rank){
+                return(
+                  <div key={x.i} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 4px",
+                    borderBottom:rank<ranked.length-1?"1px solid var(--bd)":"none"}}>
+                    <div style={{width:20,height:20,borderRadius:10,display:"flex",alignItems:"center",
+                      justifyContent:"center",fontSize:11,fontWeight:900,flexShrink:0,
+                      background:["#f0c040","#b0b8c0","#c07840","var(--s3)"][rank],
+                      color:rank<3?"#000":"var(--tx2)"}}>{rank+1}</div>
+                    <div style={{flex:1,fontSize:13,fontWeight:700}}>{pending.gs.players[x.i]}</div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:15,fontWeight:900,color:x.v>=0?"var(--plus)":"var(--minus)"}}>{x.v>=0?"+":""}{x.v}</div>
+                      <div style={{fontSize:10,color:"var(--tx3)"}}>{fp[x.i].toLocaleString()}点</div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
           {pending.agariYame ? (
             <>
-              <p style={{fontSize:13,color:"var(--tx2)",marginBottom:13,textAlign:"center"}}>
+              <p style={{fontSize:12,color:"var(--tx2)",marginBottom:10,textAlign:"center"}}>
                 親があがりました。あがりやめにしますか？
               </p>
-              <button className="mo" style={{color:"var(--minus)"}} onClick={()=>{onFinish(pending.gs);setModal(null);}}>あがりやめ（終了）</button>
+              <button className="mo" style={{color:"var(--minus)"}} onClick={()=>{onFinish(pending.gs);setModal(null);}}>確定して終了</button>
               <button className="mo" onClick={()=>{setGameState(pending.gs);setModal(null);}}>続行する</button>
             </>
           ) : (
             <>
-              <p style={{fontSize:13,color:"var(--tx2)",marginBottom:13,textAlign:"center"}}>対局終了条件を満たしました</p>
-              <button className="mo" style={{color:"var(--minus)"}} onClick={()=>{onFinish(pending.gs);setModal(null);}}>対局終了</button>
-              <button className="mo" onClick={()=>{setGameState(pending.gs);setModal(null);}}>延長する</button>
+              <button className="mo" style={{color:"var(--minus)"}} onClick={()=>{onFinish(pending.gs);setModal(null);}}>確定して終了</button>
+              <button className="mo" onClick={()=>{setGameState(pending.gs);setModal(null);}}>戻る（延長）</button>
             </>
           )}
         </Modal>
@@ -3113,7 +3153,7 @@ function SettingsScreen({ settings, setSettings, members, setMembers, games, use
             <button className={`sb${settings.gameType==="hanchan"?" on":""}`} onClick={()=>setSettings(s=>({...s,gameType:"hanchan"}))}>半荘戦</button>
           </div>
         </div>
-        <div className="str"><span style={{fontSize:13}}>箱下終了</span>
+        <div className="str"><span style={{fontSize:13}}>トビ<br/><span style={{fontSize:10,color:"var(--tx3)"}}>0点以下で終了</span></span>
           <div className="seg" style={{width:105}}>
             <button className={`sb${settings.tobiEnd?" on":""}`} onClick={()=>setSettings(s=>({...s,tobiEnd:true}))}>有効</button>
             <button className={`sb${!settings.tobiEnd?" on":""}`} onClick={()=>setSettings(s=>({...s,tobiEnd:false}))}>無効</button>
