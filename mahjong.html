@@ -1303,17 +1303,17 @@ function SetupScreen({ members, settings, onStart }) {
             return (
               <div key={i} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 13px",
                 borderBottom:i<sel.length-1?"1px solid var(--bd)":"none"}}>
-                <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                <div style={{display:"flex",flexDirection:"row",gap:4}}>
                   <button onClick={() => moveUp(i)} disabled={i===0}
                     style={{background:i===0?"var(--s2)":"var(--s3)",border:"1px solid var(--bd)",
                       borderRadius:6,cursor:i===0?"default":"pointer",
                       color:i===0?"var(--bd)":"var(--tx)",fontSize:14,
-                      padding:"4px 9px",lineHeight:1,fontFamily:"inherit"}}>↑</button>
+                      padding:"6px 12px",lineHeight:1,fontFamily:"inherit"}}>↑</button>
                   <button onClick={() => moveDown(i)} disabled={i===sel.length-1}
                     style={{background:i===sel.length-1?"var(--s2)":"var(--s3)",border:"1px solid var(--bd)",
                       borderRadius:6,cursor:i===sel.length-1?"default":"pointer",
                       color:i===sel.length-1?"var(--bd)":"var(--tx)",fontSize:14,
-                      padding:"4px 9px",lineHeight:1,fontFamily:"inherit"}}>↓</button>
+                      padding:"6px 12px",lineHeight:1,fontFamily:"inherit"}}>↓</button>
                 </div>
                 <button onClick={() => setOyaIdx(i)}
                   style={{width:30,height:30,borderRadius:"50%",border:"none",cursor:"pointer",fontFamily:"inherit",
@@ -2980,25 +2980,66 @@ function calcStats(player, games) {
   // 平均素点: 最終持ち点の平均
   const avgFinalPts = totalGames>0 ? totalFinalPts / totalGames : 0;
 
-  // 偶発恩恵: (実際delta - 役なし時baseDelta) の合計 ÷ 総局数
-  // baseDeltaがある場合は全員分正確に計算、ない場合は従来の近似
+  // 偶発恩恵: 一発・裏ドラによる恩恵のみを抽出
+  // delta = baseDelta + 本場分 + リーチ棒移動分 + 一発裏ドラ分
+  // 偶発恩恵 = delta - baseDelta - 本場分 - リーチ棒移動分
   var luckyBonusTotal = 0;
   allR.forEach(function(x) {
     var r=x.r; var pi=x.pi;
     if (!r.info || !r.info.type) return;
-    var actual = r.delta[pi];
-    if (r.info.baseDelta && r.info.baseDelta[pi] !== undefined) {
-      // baseDelta（全員分）がある場合：正確に計算
-      luckyBonusTotal += (actual - r.info.baseDelta[pi]);
-    } else if (r.info.baseScore) {
-      // 後方互換：古いデータはbaseScore（和了者のみ）で近似
-      var winnerIdx = r.delta.findIndex(function(d){ return d > 0; });
-      if (pi === winnerIdx) {
-        luckyBonusTotal += (actual - r.info.baseScore);
-      } else if (r.info.type === "ron" && r.info.from === pi) {
-        luckyBonusTotal += (actual - (-r.info.baseScore));
+    if (!r.info.baseDelta) {
+      // 後方互換（古いデータ・baseDeltaなし）: 近似計算
+      if (!r.info.baseScore) return;
+      var actual0 = r.delta[pi];
+      var winnerIdx0 = r.delta.findIndex(function(d){return d>0;});
+      if (pi === winnerIdx0) {
+        luckyBonusTotal += (actual0 - r.info.baseScore);
+      } else if (r.info.type==="ron" && r.info.from===pi) {
+        luckyBonusTotal += (actual0 - (-r.info.baseScore));
       }
+      return;
     }
+
+    var actual = r.delta[pi];
+    var base = r.info.baseDelta[pi];
+    var honba = r.info.honba || 0;
+    var nP2 = r.delta.length;
+    var winnerIdx = r.delta.findIndex(function(d){return d>0;});
+
+    // リーチ棒移動分: riichiOrderから今局のリーチ本数を取得
+    var riichiCount = r.riichiOrder ? r.riichiOrder.length : 0;
+    var didRiichi = r.roundStatus && r.roundStatus[pi]==="riichi";
+
+    // 本場分の計算: deltaに含まれている本場の影響を除去する
+    // 和了者: baseDeltaより本場分多く受け取っている（プラス）
+    // 放銃者/払い手: baseDeltaより本場分多く払っている（マイナス）
+    var honbaDiff = 0;
+    if (r.info.type==="ron") {
+      if (pi===winnerIdx) honbaDiff = honba*300;       // 和了者は本場分多く受け取る
+      else if (r.info.from===pi) honbaDiff = -(honba*300); // 放銃者は本場分多く払う
+    } else {
+      if (pi===winnerIdx) honbaDiff = honba*100*(nP2-1); // 和了者は全員から本場分受け取る
+      else honbaDiff = -(honba*100);                      // 払い手は本場分多く払う
+    }
+
+    // リーチ棒移動分の計算
+    // リーチした人: -1000（既にdeltaに含まれる）
+    // 和了者: +riichiCount×1000（既にdeltaに含まれる）
+    var riichiBobDiff = 0;
+    if (didRiichi) riichiBobDiff = -1000;
+    if (pi===winnerIdx) riichiBobDiff += riichiCount*1000;
+
+    // 供託持ち越し分 = deltaSum - baseDeltaSum
+    // 本場はゼロサム（和了者+, 払い手-）なのでdeltaSumに影響しない
+    // 今局リーチ棒も払い（-）と受け取り（+）が相殺されdeltaSumに影響しない
+    // よって deltaSum - baseDeltaSum = 前局以前からの持ち越し供託のみ
+    var deltaSum3 = r.delta.reduce(function(s,v){return s+v;},0);
+    var baseDeltaSum3 = r.info.baseDelta.reduce(function(s,v){return s+v;},0);
+    var carryKyotaku = deltaSum3 - baseDeltaSum3;
+    var carryKyotakuDiff = (pi===winnerIdx) ? carryKyotaku : 0;
+
+    // 偶発恩恵 = (actual - base) - 本場分 - 今局リーチ棒 - 持ち越し供託分
+    luckyBonusTotal += (actual - base) - honbaDiff - riichiBobDiff - carryKyotakuDiff;
   });
   const luckyBonus = tr > 0 ? luckyBonusTotal / tr : 0;
 
