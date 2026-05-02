@@ -3045,8 +3045,12 @@ function calcStats(player, games) {
 
   // 迎撃和了率
   var counterWins=wins.filter(function(x){
+    // 他の誰かが先制リーチ（orderInRound===1）している局
     var others=x.r.riichiOrder?x.r.riichiOrder.some(function(o){return o.pIdx!==x.pi&&o.orderInRound===1;}):false;
-    return others&&x.r.roundStatus?.[x.pi]!=="riichi";
+    // 自分が先制リーチ（1番手）でない（2番手以降のリーチや無リーチはOK）
+    var selfOrder=x.r.riichiOrder?x.r.riichiOrder.find(function(o){return o.pIdx===x.pi;}):null;
+    var notFirstRiichi=!selfOrder||selfOrder.orderInRound!==1;
+    return others&&notFirstRiichi;
   });
   // 親継続率
   var oyaTotal=0,oyaContinue=0;
