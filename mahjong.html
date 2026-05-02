@@ -2054,23 +2054,26 @@ function WinInputModal({ players, selP, winType, ronTarget, isOya, oyaIdx, playe
     const baseDoraHan = dora + aka; // 裏ドラ除く（表ドラ・赤ドラは含める）
     const baseTotalHan = baseYakuHan + baseDoraHan;
 
-    const calcBaseScore = () => {
-      if (baseTotalHan <= 0) return 0;
-      // honba=0, kyotaku=0 で純粋な役・ドラ点数のみ計算
+    // baseDelta: 役なし時（一発・裏ドラなし、honba/供託なし）の全員分delta
+    const calcBaseDelta = () => {
+      if (baseTotalHan <= 0) return players.map(()=>0);
       if (winType==="tsumo") {
         const bd = tsumoDeltas(baseTotalHan,effectiveFu,isOya,selP,oyaIdx,players.length,0,0,kiriage);
-        return bd ? bd[selP] : 0;
+        return bd ? bd : players.map(()=>0);
       } else {
         const bp = getRonPts(baseTotalHan,effectiveFu,isOya,kiriage);
-        return bp ?? 0;
+        if (!bp) return players.map(()=>0);
+        return players.map((_,i)=>i===selP?bp:i===ronTarget?-bp:0);
       }
     };
-    const baseScore = calcBaseScore();
+    const baseDelta = calcBaseDelta();
+    const baseScore = baseDelta[selP]; // 後方互換のため残す
 
     const extraInfo = {
-      baseScore,                              // 役なし点数（偶発恩恵計算用）
-      riichiOrder: riichiOrderInRound,        // 何番目のリーチか
-      isFirstRiichi: riichiOrderInRound===1,  // 先制リーチか
+      baseScore,
+      baseDelta,                              // 全員分の役なし時delta（偶発恩恵計算用）
+      riichiOrder: riichiOrderInRound,
+      isFirstRiichi: riichiOrderInRound===1,
     };
 
     if (winType==="tsumo") {
@@ -2646,7 +2649,16 @@ function StatsScreen({ games, onRefresh }) {
       `打点効率: ${f1(st.scoringEff)}　放銃点損失: ${f1(st.dealLoss)}`,
       `調整打点効率: ${f1(st.adjustedEff)}`,
       `局収支: ${Math.round(st.roundIncome).toLocaleString()}点/局`,
-      `偶発恩恵: ${f1(st.luckyBonus)}点/対局`,
+      `偶発恩恵: ${f1(st.luckyBonus)}点/局`,
+      ``,
+      `▼ 局別統計`,
+      `親継続率: ${f1(st.oyaContinueRate)}%(${st.oyaContinue}/${st.oyaTotal})`,
+      `流局時聴牌率: ${f1(st.ryukyokuTenpaiRate)}% 親:${f1(st.ryuOyaRate)}% 子:${f1(st.ryuKoRate)}%`,
+      `迎撃和了率: ${f1(st.counterWinRate)}%(${st.counterWinsCount}/${st.tr}局)`,
+      ``,
+      `▼ 平均打点詳細`,
+      `親番: ${Math.round(st.avgOyaWin||0).toLocaleString()}点 子番: ${Math.round(st.avgKoWin||0).toLocaleString()}点`,
+      `リーチ: ${Math.round(st.avgRWin).toLocaleString()}点 面前: ${Math.round(st.avgFuuroFreeWin||0).toLocaleString()}点 副露: ${Math.round(st.avgFWin).toLocaleString()}点`,
     ].join("\n");
     if(navigator.share) { navigator.share({title:"雀録MJ-LOG 統計",text:lines}); }
     else if(navigator.clipboard) { navigator.clipboard.writeText(lines).then(()=>alert("コピーしました")); }
@@ -2738,6 +2750,20 @@ function StatsScreen({ games, onRefresh }) {
         <div className="chd">局別統計</div>
         <SR label="親継続率" value={`${f1(st.oyaContinueRate)}%`} sub={`${st.oyaContinue}回/${st.oyaTotal}親番`} mKey="oyaContinueRate"/>
         <SR label="流局時聴牌率" value={`${f1(st.ryukyokuTenpaiRate)}%`} sub={`${st.ryukyokuTenpaiCount}回/${st.ryukyokuCount}流局`} mKey="ryukyokuTenpaiRate"/>
+        <div style={{margin:"0 0 4px",background:"var(--s2)",borderRadius:6,overflow:"hidden",marginLeft:14,marginRight:14,marginBottom:4}}>
+          {[
+            {label:"親番時", rate:st.ryuOyaRate||0, tenpai:st.ryuTOyaCount||0, total:st.ryuOyaCount||0},
+            {label:"子番時", rate:st.ryuKoRate||0,  tenpai:st.ryuTKoCount||0,  total:st.ryuKoCount||0},
+          ].map(function(x,idx,arr){return(
+            <div key={x.label} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+              padding:"6px 12px",borderBottom:idx<arr.length-1?"1px solid var(--bd)":"none"}}>
+              <span style={{fontSize:11,color:"var(--tx3)"}}>└ {x.label}</span>
+              <span style={{fontSize:12,fontWeight:700,color:"var(--ac)",textAlign:"right"}}>
+                {f1(x.rate)}% <span style={{fontSize:10,color:"var(--tx3)",fontWeight:400}}>({x.tenpai}/{x.total})</span>
+              </span>
+            </div>
+          );})}
+        </div>
       </div>
 
       {/* 和了統計 */}
@@ -2746,8 +2772,10 @@ function StatsScreen({ games, onRefresh }) {
         <SR label="平均打点" value={`${Math.round(st.avgWin).toLocaleString()}点`} mKey="avgWin"/>
         <div style={{margin:"0 0 4px",background:"var(--s2)",borderRadius:6,overflow:"hidden",marginLeft:14,marginRight:14,marginBottom:4}}>
           {[
+            {label:"親番時", val:st.avgOyaWin||0, mk:"avgOyaWin"},
+            {label:"子番時", val:st.avgKoWin||0,  mk:"avgKoWin"},
             {label:"リーチ時", val:st.avgRWin,          mk:"avgRWin"},
-            {label:"面前時",   val:st.avgFuuroFreeWin??0, mk:null},
+            {label:"面前時",   val:st.avgFuuroFreeWin||0, mk:"avgFuuroFreeWin"},
             {label:"副露時",   val:st.avgFWin,           mk:"avgFWin"},
           ].map(({label,val,mk},idx,arr)=>(
             <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
@@ -2790,7 +2818,7 @@ function StatsScreen({ games, onRefresh }) {
         <SR label="局収支" value={`${Math.round(st.roundIncome).toLocaleString()}点`}
           sub="(最終点合計−初期点合計)÷総局数" mKey="roundIncome"/>
         <SR label="偶発恩恵" value={`${f1(st.luckyBonus)}点`}
-          sub="(実際収支−役なし時収支)÷総対局数" mKey="luckyBonus"/>
+          sub="(実際収支−役なし時収支)÷総局数" mKey="luckyBonus"/>
       </div>
       <div className="card">
         <div className="chd">役種達成回数</div>
@@ -2893,6 +2921,17 @@ function calcStats(player, games) {
   const horaRate=tr?wins.length/tr*100:0;
   const dealRate=tr?deals.length/tr*100:0;
   const avgWin=avg(wins);
+  // 親・子別平均打点
+  const oyaWins = wins.filter(function(x){ return x.r.info&&x.r.info.renchon!==undefined ? x.pi===oyaIdxOfRound(x.r,x.g) : false; });
+  function oyaIdxOfRound(r,g) {
+    var ds=g.currentRound&&g.currentRound.dealerStart?g.currentRound.dealerStart:0;
+    var ri=g.rounds.indexOf(r);
+    return ri>=0?(ds+ri)%4:-1;
+  }
+  // 実際は各局のoyaIdxをroundStatusから取得するのが正確
+  // 簡易版: info.renchon===trueなら和了者が親
+  const oyaWinsSimple = wins.filter(function(x){ return x.r.info&&x.r.info.renchon; });
+  const koWinsSimple  = wins.filter(function(x){ return x.r.info&&!x.r.info.renchon&&x.r.info.type; });
   const scoringEff=avgWin*horaRate/100;
   const dealLoss=avgDeal*dealRate/100;
   const adjustedEff=scoringEff-dealLoss;
@@ -2901,27 +2940,27 @@ function calcStats(player, games) {
   // 平均素点: 最終持ち点の平均
   const avgFinalPts = totalGames>0 ? totalFinalPts / totalGames : 0;
 
-  // 偶発恩恵: (実際収支 - 役なし時収支) ÷ 総対局数
-  // 役なし = 一発・裏ドラを除いた場合の点数（baseScore）
-  // 和了者の恩恵: 実際得点 - baseScore（供託・本場は両方から除外済み）
-  // 放銃者の恩恵: 役なし時の失点 = -baseScore（放銃点 = 和了点なので単純にマイナス）
-  // ツモ払い手: 按分せず0とみなす（払い手の偶発要素は和了者側で計上）
-  let luckyBonusTotal = 0;
-  allR.forEach(({r, pi}) => {
-    if (!r.info?.type || !r.info.baseScore) return;
-    const actual = r.delta[pi];
-    const winnerIdx = r.delta.findIndex(d => d > 0);
-    if (pi === winnerIdx) {
-      // 和了者: 実際得点（供託含む）- baseScore
-      // baseScoreはhonba・供託なしで計算済みなので、その差が偶発恩恵
-      luckyBonusTotal += (actual - r.info.baseScore);
-    } else if (r.info.type === "ron" && r.info.from === pi) {
-      // ロン放銃者: 役なし時の失点は -baseScore
-      luckyBonusTotal += (actual - (-r.info.baseScore));
+  // 偶発恩恵: (実際delta - 役なし時baseDelta) の合計 ÷ 総局数
+  // baseDeltaがある場合は全員分正確に計算、ない場合は従来の近似
+  var luckyBonusTotal = 0;
+  allR.forEach(function(x) {
+    var r=x.r; var pi=x.pi;
+    if (!r.info || !r.info.type) return;
+    var actual = r.delta[pi];
+    if (r.info.baseDelta && r.info.baseDelta[pi] !== undefined) {
+      // baseDelta（全員分）がある場合：正確に計算
+      luckyBonusTotal += (actual - r.info.baseDelta[pi]);
+    } else if (r.info.baseScore) {
+      // 後方互換：古いデータはbaseScore（和了者のみ）で近似
+      var winnerIdx = r.delta.findIndex(function(d){ return d > 0; });
+      if (pi === winnerIdx) {
+        luckyBonusTotal += (actual - r.info.baseScore);
+      } else if (r.info.type === "ron" && r.info.from === pi) {
+        luckyBonusTotal += (actual - (-r.info.baseScore));
+      }
     }
-    // ツモ払い手は0（和了者側で集計）
   });
-  const luckyBonus = n > 0 ? luckyBonusTotal / n : 0;
+  const luckyBonus = tr > 0 ? luckyBonusTotal / tr : 0;
 
   // 迎撃和了率
   var counterWins=wins.filter(function(x){
@@ -2940,6 +2979,15 @@ function calcStats(player, games) {
   // 流局時聴牌率
   var ryuR=allR.filter(function(x){return x.r.info&&x.r.info.ryukyoku;});
   var ryuT=ryuR.filter(function(x){return x.r.roundStatus&&x.r.roundStatus[x.pi]==="riichi";});
+  // 親・子別流局聴牌
+  var ryuROya=ryuR.filter(function(x){
+    var ds=x.g.currentRound&&x.g.currentRound.dealerStart?x.g.currentRound.dealerStart:0;
+    var ri=x.g.rounds.indexOf(x.r);
+    return ri>=0&&(ds+ri)%4===x.pi;
+  });
+  var ryuRKo=ryuR.filter(function(x){ return ryuROya.indexOf(x)<0; });
+  var ryuTOya=ryuROya.filter(function(x){return x.r.roundStatus&&x.r.roundStatus[x.pi]==="riichi";});
+  var ryuTKo=ryuRKo.filter(function(x){return x.r.roundStatus&&x.r.roundStatus[x.pi]==="riichi";});
   // 役回数
   var yakuCounts={};
   wins.forEach(function(x){
@@ -2963,6 +3011,8 @@ function calcStats(player, games) {
     counterWinRate:tr?counterWins.length/tr*100:0, counterWinsCount:counterWins.length,
     oyaContinueRate:oyaTotal?oyaContinue/oyaTotal*100:0, oyaTotal:oyaTotal, oyaContinue:oyaContinue,
     ryukyokuTenpaiRate:ryuR.length?ryuT.length/ryuR.length*100:0, ryukyokuCount:ryuR.length, ryukyokuTenpaiCount:ryuT.length,
+    ryuOyaRate:ryuROya.length?ryuTOya.length/ryuROya.length*100:0, ryuOyaCount:ryuROya.length, ryuTOyaCount:ryuTOya.length,
+    ryuKoRate:ryuRKo.length?ryuTKo.length/ryuRKo.length*100:0, ryuKoCount:ryuRKo.length, ryuTKoCount:ryuTKo.length,
     yakuCounts:yakuCounts,
     wins:wins.length, deals:deals.length, rRcnt:rR.length, fRcnt:fR.length,
     horaRate, dealRate,
@@ -2971,6 +3021,7 @@ function calcStats(player, games) {
     tsumoW:tW, ronW:roW,
     rW, fW:fW.length, mW:mW.length,
     avgWin, avgRWin:avg(rW), avgFWin:avg(fW), avgFuuroFreeWin:avg(mW),
+    avgOyaWin:avg(oyaWinsSimple), avgKoWin:avg(koWinsSimple),
     riichiWinRate:rR.length?rW.length/rR.length*100:0,
     riichiDealRate:rR.length?rD.length/rR.length*100:0,
     ippatsuRate:rR.length?ippatsuW.length/rR.length*100:0,
