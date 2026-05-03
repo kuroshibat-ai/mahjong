@@ -873,10 +873,10 @@ function App() {
   // visibilitychangeで再同期（iOS PWAのfocusイベント非発火対策）
   useEffect(() => {
     const onVisible = () => {
-      const saved = loadSession();
-      if (saved?.access_token && !gameState) {
-        sb.getGames(saved.access_token).then(g => { if(g.length>0) setGames(g); }).catch(()=>{});
-      }
+      if (gameState) return;
+      withAutoRefresh(function(token){ return sb.getGames(token); })
+        .then(function(g){ if(Array.isArray(g) && g.length>=0) setGames(g); })
+        .catch(function(){});
     };
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") onVisible();
@@ -929,13 +929,38 @@ function App() {
     setSyncing(false);
   };
 
-  const handleRefresh = async () => {
-    if (!session) return;
-    setSyncing(true);
+  // トークン自動更新付きAPIコール
+  const withAutoRefresh = async (apiFn) => {
+    const saved = loadSession();
+    if (!saved) return null;
+    // まず現在のトークンで試みる
     try {
-      const g = await sb.getGames(session.access_token);
-      setGames(g);
-    } catch(e) { console.error(e); }
+      const result = await apiFn(saved.access_token);
+      if (Array.isArray(result)) return result;
+    } catch(e) {}
+    // 失敗したらrefresh_tokenで更新して再試行
+    if (!saved.refresh_token) return null;
+    try {
+      const res = await sb.refreshToken(saved.refresh_token);
+      if (!res.access_token) return null;
+      const newSess = {
+        access_token: res.access_token,
+        refresh_token: res.refresh_token || saved.refresh_token,
+        user: res.user || saved.user,
+      };
+      setSession(newSess);
+      saveSession(newSess);
+      return await apiFn(res.access_token);
+    } catch(e) {
+      console.error('refresh failed:', e);
+      return null;
+    }
+  };
+
+  const handleRefresh = async () => {
+    setSyncing(true);
+    const g = await withAutoRefresh(function(token){ return sb.getGames(token); });
+    if (Array.isArray(g)) setGames(g);
     setSyncing(false);
   };
 
