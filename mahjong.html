@@ -828,6 +828,32 @@ function App() {
 
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [members, setMembers] = useState([]);
+
+  // トークン自動更新付きAPIコール（App内の全非同期処理で使用）
+  const withAutoRefresh = async (apiFn) => {
+    const saved = loadSession();
+    if (!saved) return null;
+    try {
+      const result = await apiFn(saved.access_token);
+      if (Array.isArray(result)) return result;
+    } catch(e) {}
+    if (!saved.refresh_token) return null;
+    try {
+      const res = await sb.refreshToken(saved.refresh_token);
+      if (!res.access_token) return null;
+      const newSess = {
+        access_token: res.access_token,
+        refresh_token: res.refresh_token || saved.refresh_token,
+        user: res.user || saved.user,
+      };
+      setSession(newSess);
+      saveSession(newSess);
+      return await apiFn(res.access_token);
+    } catch(e) {
+      console.error('refresh failed:', e);
+      return null;
+    }
+  };
   const [games, setGames] = useState([]);
   const [gameState, setGameState] = useState(null);
   const [viewingGame, setViewingGame] = useState(null);
@@ -927,34 +953,6 @@ function App() {
       alert(res.error_description || res.msg || "認証エラー");
     }
     setSyncing(false);
-  };
-
-  // トークン自動更新付きAPIコール
-  const withAutoRefresh = async (apiFn) => {
-    const saved = loadSession();
-    if (!saved) return null;
-    // まず現在のトークンで試みる
-    try {
-      const result = await apiFn(saved.access_token);
-      if (Array.isArray(result)) return result;
-    } catch(e) {}
-    // 失敗したらrefresh_tokenで更新して再試行
-    if (!saved.refresh_token) return null;
-    try {
-      const res = await sb.refreshToken(saved.refresh_token);
-      if (!res.access_token) return null;
-      const newSess = {
-        access_token: res.access_token,
-        refresh_token: res.refresh_token || saved.refresh_token,
-        user: res.user || saved.user,
-      };
-      setSession(newSess);
-      saveSession(newSess);
-      return await apiFn(res.access_token);
-    } catch(e) {
-      console.error('refresh failed:', e);
-      return null;
-    }
   };
 
   const handleRefresh = async () => {
