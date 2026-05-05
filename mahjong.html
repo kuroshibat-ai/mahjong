@@ -818,6 +818,22 @@ function saveSession(session) {
 function loadSession() {
   try { const v = localStorage.getItem("mj_session"); return v ? JSON.parse(v) : null; } catch { return null; }
 }
+// 未送信データの一時保存
+function savePendingGames(games) {
+  try { localStorage.setItem("mj_pending", JSON.stringify(games)); } catch {}
+}
+function loadPendingGames() {
+  try { const v = localStorage.getItem("mj_pending"); return v ? JSON.parse(v) : []; } catch { return []; }
+}
+function addPendingGame(game) {
+  var pending = loadPendingGames();
+  var exists = pending.some(function(g){ return g.id === game.id; });
+  if (!exists) { pending.push(game); savePendingGames(pending); }
+}
+function removePendingGame(gameId) {
+  var pending = loadPendingGames().filter(function(g){ return g.id !== gameId; });
+  savePendingGames(pending);
+}
 
 function App() {
   const [tab, setTab] = useState("game");
@@ -923,13 +939,33 @@ function App() {
         if (profile.settings && Object.keys(profile.settings).length) setSettings(s => ({...s, ...profile.settings}));
       }
       const gamesData = await sb.getGames(token);
-      // 401エラーチェック（配列でなければ認証エラー）
       if (!Array.isArray(gamesData)) throw new Error("auth_error");
       setGames(gamesData);
+
+      // 未送信データを自動送信
+      const saved = loadSession();
+      if (saved && saved.user) {
+        var pending = loadPendingGames();
+        var existingIds = gamesData.map(function(g){ return g.id; });
+        var toSend = pending.filter(function(g){ return existingIds.indexOf(g.id) < 0; });
+        for (var i=0; i<toSend.length; i++) {
+          try {
+            await sb.saveGame(token, saved.user.id, toSend[i]);
+            removePendingGame(toSend[i].id);
+          } catch(e2) {
+            console.error("未送信データの再送信失敗:", e2);
+          }
+        }
+        if (toSend.length > 0) {
+          // 送信後に最新データを再取得
+          var refreshed = await sb.getGames(token);
+          if (Array.isArray(refreshed)) setGames(refreshed);
+        }
+      }
     } catch(e) {
       setSyncing(false);
       setAuthLoading(false);
-      throw e; // 呼び出し元でcatchできるように再スロー
+      throw e;
     }
     setSyncing(false);
     setAuthLoading(false);
@@ -994,26 +1030,33 @@ function App() {
 
   const finishGame = async (gs) => {
     const g = { ...gs, date: new Date().toLocaleString("ja-JP"), id: Date.now() };
-    const newGames = [g, ...games];
-    setGames(newGames);
+    setGames(function(prev){ return [g, ...prev]; });
     setGameState(null);
     setViewingGame(g);
     setTab("history");
 
-    if (session) {
-      setSyncing(true);
-      try {
-        await sb.saveGame(session.access_token, session.user.id, g);
-        // 保存成功を確認するため再取得
-        const updated = await sb.getGames(session.access_token);
-        setGames(updated);
-      } catch(e) {
-        console.error("保存エラー:", e);
-        // トークン期限切れの可能性 → 再ログインを促す
-        alert("⚠️ クラウドへの保存に失敗しました。\n一度ログアウトして再ログインしてください。\nデータはこの画面を閉じるまで表示されています。");
+    // まずlocalStorageに一時保存（通信失敗に備える）
+    addPendingGame(g);
+
+    // Supabaseへ送信を試みる
+    setSyncing(true);
+    try {
+      const saved = loadSession();
+      if (saved) {
+        const userId = saved.user ? saved.user.id : null;
+        if (userId) {
+          await sb.saveGame(saved.access_token, userId, g);
+          removePendingGame(g.id); // 送信成功 → 未送信リストから削除
+          // 最新データを取得
+          const updated = await withAutoRefresh(function(t){ return sb.getGames(t); });
+          if (Array.isArray(updated)) setGames(updated);
+        }
       }
-      setSyncing(false);
+    } catch(e) {
+      console.error("保存エラー（未送信リストに保存済み）:", e);
+      // 失敗してもlocalStorageに残っているので次回自動送信
     }
+    setSyncing(false);
   };
 
   const handleDeleteGame = async (gameId) => {
