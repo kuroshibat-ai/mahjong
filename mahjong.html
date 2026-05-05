@@ -793,11 +793,12 @@ const sb = {
     return Array.isArray(d) ? d.map(g => ({...g.data, id: g.id, date: g.date})) : [];
   },
   async saveGame(token, userId, game) {
-    await fetch(`${SUPABASE_URL}/rest/v1/games`, {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/games`, {
       method:"POST",
       headers: {...sb.authHeaders(token), "Prefer":"resolution=merge-duplicates"},
       body: JSON.stringify({id: game.id, user_id: userId, date: game.date, data: game}),
     });
+    if (!r.ok) throw new Error("saveGame failed: " + r.status);
   },
   async deleteGame(token, gameId) {
     await fetch(`${SUPABASE_URL}/rest/v1/games?id=eq.${gameId}`, {
@@ -818,6 +819,23 @@ function saveSession(session) {
 function loadSession() {
   try { const v = localStorage.getItem("mj_session"); return v ? JSON.parse(v) : null; } catch { return null; }
 }
+// ローカルにゲームデータを保存（Supabase障害時のバックアップ）
+function saveLocalGames(games) {
+  try { localStorage.setItem("mj_games", JSON.stringify(games)); } catch(e) {}
+}
+function loadLocalGames() {
+  try { var v = localStorage.getItem("mj_games"); return v ? JSON.parse(v) : []; } catch(e) { return []; }
+}
+// Supabaseデータと未送信データをマージしてlocalStorageに保存
+// 未送信データはSupabaseにないので消さない
+function mergeAndSaveLocal(supabaseGames) {
+  var pending = loadPendingGames();
+  var supaIds = supabaseGames.map(function(g){ return g.id; });
+  var pendingOnly = pending.filter(function(g){ return supaIds.indexOf(g.id) < 0; });
+  saveLocalGames(pendingOnly.concat(supabaseGames));
+  return pendingOnly.concat(supabaseGames);
+}
+
 // 未送信データの一時保存
 function savePendingGames(games) {
   try { localStorage.setItem("mj_pending", JSON.stringify(games)); } catch {}
@@ -848,15 +866,20 @@ function App() {
   // トークン自動更新付きAPIコール（App内の全非同期処理で使用）
   const withAutoRefresh = async (apiFn) => {
     const saved = loadSession();
-    if (!saved) return null;
+    if (!saved) { console.log("[refresh] no session"); return null; }
+    // 1st attempt
     try {
       const result = await apiFn(saved.access_token);
-      if (Array.isArray(result)) return result;
-    } catch(e) {}
-    if (!saved.refresh_token) return null;
+      if (Array.isArray(result)) { console.log("[refresh] 1st attempt OK, count:", result.length); return result; }
+      console.log("[refresh] 1st attempt returned non-array:", result);
+    } catch(e) { console.log("[refresh] 1st attempt threw:", e); }
+    // refresh
+    if (!saved.refresh_token) { console.log("[refresh] no refresh_token"); return null; }
+    console.log("[refresh] trying refresh token...");
     try {
       const res = await sb.refreshToken(saved.refresh_token);
-      if (!res.access_token) return null;
+      console.log("[refresh] refresh response:", JSON.stringify(res).slice(0,100));
+      if (!res.access_token) { console.log("[refresh] no access_token in response"); return null; }
       const newSess = {
         access_token: res.access_token,
         refresh_token: res.refresh_token || saved.refresh_token,
@@ -864,9 +887,12 @@ function App() {
       };
       setSession(newSess);
       saveSession(newSess);
-      return await apiFn(res.access_token);
+      console.log("[refresh] token refreshed, retrying...");
+      const result2 = await apiFn(res.access_token);
+      console.log("[refresh] 2nd attempt result:", Array.isArray(result2) ? "array len="+result2.length : result2);
+      return result2;
     } catch(e) {
-      console.error('refresh failed:', e);
+      console.error("[refresh] refresh failed:", e);
       return null;
     }
   };
@@ -879,6 +905,10 @@ function App() {
     const init = async () => {
       const saved = loadSession();
       if (!saved?.access_token) { setAuthLoading(false); return; }
+
+      // まずlocalStorageのデータを即座に表示（ネットワーク待ち中も見える）
+      const localGames = loadLocalGames();
+      if (localGames.length > 0) setGames(localGames);
 
       // まずそのままデータ取得を試みる
       try {
@@ -940,7 +970,8 @@ function App() {
       }
       const gamesData = await sb.getGames(token);
       if (!Array.isArray(gamesData)) throw new Error("auth_error");
-      setGames(gamesData);
+      var merged = mergeAndSaveLocal(gamesData);
+      setGames(merged); // 未送信データも含めて表示
 
       // 未送信データを自動送信
       const saved = loadSession();
@@ -994,7 +1025,7 @@ function App() {
   const handleRefresh = async () => {
     setSyncing(true);
     const g = await withAutoRefresh(function(token){ return sb.getGames(token); });
-    if (Array.isArray(g)) setGames(g);
+    if (Array.isArray(g)) { var m = mergeAndSaveLocal(g); setGames(m); }
     setSyncing(false);
   };
 
@@ -1014,6 +1045,12 @@ function App() {
     }, 1000);
     return () => clearTimeout(t);
   }, [settings, members, session]);
+
+  const [directEntry, setDirectEntry] = useState(null); // {players, oyaIdx}
+
+  const handleDirectEntry = (players, oyaIdx) => {
+    setDirectEntry({ players: players, oyaIdx: oyaIdx });
+  };
 
   const startGame = (players, oyaStart) => {
     setGameState({
@@ -1035,26 +1072,32 @@ function App() {
     setViewingGame(g);
     setTab("history");
 
-    // まずlocalStorageに一時保存（通信失敗に備える）
+    // localStorageのゲームリストを即座に更新
+    var localG = loadLocalGames();
+    saveLocalGames([g, ...localG]);
+    // 未送信キューにも追加
     addPendingGame(g);
 
-    // Supabaseへ送信を試みる
+    // Supabaseへ送信（トークン自動更新付き）
     setSyncing(true);
     try {
-      const saved = loadSession();
-      if (saved) {
-        const userId = saved.user ? saved.user.id : null;
-        if (userId) {
-          await sb.saveGame(saved.access_token, userId, g);
-          removePendingGame(g.id); // 送信成功 → 未送信リストから削除
-          // 最新データを取得
-          const updated = await withAutoRefresh(function(t){ return sb.getGames(t); });
-          if (Array.isArray(updated)) setGames(updated);
-        }
+      // withAutoRefreshのsaveGame版: 失敗したらrefreshして再試行
+      var sendGame = async function(token) {
+        const saved = loadSession();
+        const userId = saved && saved.user ? saved.user.id : null;
+        if (!userId) throw new Error("no userId");
+        await sb.saveGame(token, userId, g);
+        return [g]; // 成功を示すダミー配列（withAutoRefreshがArray.isArrayで判定するため）
+      };
+      var result = await withAutoRefresh(sendGame);
+      if (Array.isArray(result)) {
+        removePendingGame(g.id); // 送信成功 → 未送信リストから削除
+        // 最新データを取得
+        const updated = await withAutoRefresh(function(t){ return sb.getGames(t); });
+        if (Array.isArray(updated)) { var mu = mergeAndSaveLocal(updated); setGames(mu); }
       }
     } catch(e) {
       console.error("保存エラー（未送信リストに保存済み）:", e);
-      // 失敗してもlocalStorageに残っているので次回自動送信
     }
     setSyncing(false);
   };
@@ -1106,7 +1149,43 @@ function App() {
             同期中...
           </div>
         )}
-        {tab==="game" && !gameState && <SetupScreen members={members} settings={settings} onStart={startGame}/>}
+        {tab==="game" && !gameState && <SetupScreen members={members} settings={settings} onStart={startGame} onDirectEntry={handleDirectEntry}/>}
+        {directEntry && (
+          <DirectEntryModal
+            players={directEntry.players}
+            settings={settings}
+            onClose={function(){ setDirectEntry(null); }}
+            onConfirm={function(finalPts) {
+              // 最終点数から擬似的なgameStateを作成
+              var startPts = settings.startPoints;
+              var deltas = finalPts.map(function(fp){ return fp - startPts; });
+              // ゼロサム調整（合計が合わない場合トップに調整）
+              var sum = deltas.reduce(function(s,v){return s+v;},0);
+              if (sum !== 0) {
+                var topIdx = finalPts.reduce(function(mi,v,i){return v>finalPts[mi]?i:mi;},0);
+                deltas[topIdx] -= sum;
+                finalPts[topIdx] -= sum;
+              }
+              var gs = {
+                players: directEntry.players,
+                settings: settings,
+                points: finalPts,
+                rounds: [{
+                  delta: deltas,
+                  info: { directEntry: true },
+                  roundLabel: "結果直接入力",
+                  roundStatus: directEntry.players.map(function(){ return null; }),
+                  riichiOrder: [],
+                  fuuroCount: directEntry.players.map(function(){ return 0; }),
+                }],
+                currentRound: { wind:0, round:1, honba:0, kyotaku:0, dealerStart: directEntry.oyaIdx },
+                kyotakuPoints: 0,
+              };
+              setDirectEntry(null);
+              finishGame(gs);
+            }}
+          />
+        )}
         {tab==="game" && gameState && <GameScreen gameState={{...gameState,allGames:games}} setGameState={setGameState} onFinish={finishGame}/>}
         {tab==="history" && <HistoryScreen games={games}
           onDeleteGame={handleDeleteGame} onDeleteAll={handleDeleteAllGames}
@@ -1316,7 +1395,7 @@ function AuthScreen({ mode, setMode, onAuth, loading }) {
 }
 
 // ===================== SETUP SCREEN =====================
-function SetupScreen({ members, settings, onStart }) {
+function SetupScreen({ members, settings, onStart, onDirectEntry }) {
   const [sel, setSel] = useState(members.slice(0,4));
   const [oyaIdx, setOyaIdx] = useState(0);
 
@@ -1420,7 +1499,65 @@ function SetupScreen({ members, settings, onStart }) {
       <button className="btn bp" disabled={sel.length!==4} onClick={() => onStart(sel, oyaIdx)}>
         ▶ 対局開始
       </button>
+      <button className="btn bg" disabled={sel.length!==4} style={{marginTop:8}}
+        onClick={() => onDirectEntry(sel, oyaIdx)}>
+        📝 結果だけ入力
+      </button>
     </div>
+  );
+}
+
+// ===== 結果直接入力モーダル =====
+function DirectEntryModal({ players, settings, onConfirm, onClose }) {
+  const [pts, setPts] = useState(players.map(function(){ return ""; }));
+  const total = players.length * settings.startPoints;
+  const inputSum = pts.reduce(function(s,v){ var n=parseInt(v); return s+(isNaN(n)?0:n); }, 0);
+  const diff = total - inputSum;
+  const allFilled = pts.every(function(v){ return v !== "" && !isNaN(parseInt(v)); });
+
+  return (
+    <Modal title="結果入力" onClose={onClose}>
+      <p style={{fontSize:12,color:"var(--tx2)",marginBottom:12,textAlign:"center"}}>
+        最終点数を入力してください<br/>
+        <span style={{fontSize:11,color:"var(--tx3)"}}>合計: {inputSum.toLocaleString()}点（残り{diff.toLocaleString()}点）</span>
+      </p>
+      {players.map(function(p, i) {
+        return (
+          <div key={i} style={{display:"flex",alignItems:"center",gap:10,
+            padding:"8px 4px",borderBottom:"1px solid var(--bd)"}}>
+            <div style={{flex:1,fontSize:13,fontWeight:600}}>{p}</div>
+            <input
+              type="number"
+              className="if"
+              style={{width:110,textAlign:"right"}}
+              placeholder="例: 25000"
+              value={pts[i]}
+              onChange={function(e){
+                var np = pts.slice();
+                np[i] = e.target.value;
+                setPts(np);
+              }}
+            />
+            <span style={{fontSize:12,color:"var(--tx3)"}}>点</span>
+          </div>
+        );
+      })}
+      {allFilled && diff !== 0 && (
+        <p style={{fontSize:11,color:"var(--minus)",textAlign:"center",marginTop:8}}>
+          ⚠️ 合計が{total.toLocaleString()}点と一致しません（{diff > 0 ? "+" : ""}{diff.toLocaleString()}点）
+        </p>
+      )}
+      <div style={{display:"flex",gap:8,marginTop:14}}>
+        <button className="btn bp"
+          disabled={!allFilled}
+          onClick={function(){ onConfirm(pts.map(function(v){ return parseInt(v); })); }}>
+          確認する
+        </button>
+        <button className="btn bg" style={{width:"auto",padding:"13px 18px"}} onClick={onClose}>
+          戻る
+        </button>
+      </div>
+    </Modal>
   );
 }
 
